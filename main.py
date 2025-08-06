@@ -61,15 +61,10 @@ def build_listing_embed(sale, message):
         icon_url=sale["user"].display_avatar.url if sale["user"].display_avatar else None
     )
 
-    # Use sale["attachments"] if it exists, otherwise fallback to message.attachments (for initial posting)
+    # Prefer attachments from sale["attachments"], fallback to message.attachments
     attachments = sale.get("attachments") or (message.attachments if message else [])
-
     if attachments:
-        for i, attachment in enumerate(attachments[:3]):
-            if i == 0:
-                embed.set_image(url=attachment.url)
-            else:
-                embed.add_field(name=f"📷 Image {i + 1}", value=f"[Click to view]({attachment.url})", inline=False)
+        embed.set_image(url=attachments[0].url)
 
     return embed
 
@@ -131,7 +126,7 @@ class SaleModal(discord.ui.Modal):
         except discord.Forbidden:
             await interaction.response.send_message("❌ I can't DM you. Please enable DMs from server members.", ephemeral=True)
 
-class BuyView(discord.ui.View):
+class TradeView(discord.ui.View):
     def __init__(self, seller, sale_data=None):
         super().__init__(timeout=None)
         self.seller = seller
@@ -173,23 +168,29 @@ class BuyView(discord.ui.View):
             f"✅ Trade channel created: {trade_channel.mention}", ephemeral=True
         )
 
-    @discord.ui.button(label="Delete Listing", style=discord.ButtonStyle.danger, custom_id="delete_listing", row=1)
-    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.seller.id:
-            await interaction.response.send_message("❌ Only the seller can delete this listing.", ephemeral=True)
+    @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
+    async def cancel_listing(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.seller:
+            await interaction.response.send_message("Only the seller can cancel this listing.", ephemeral=True)
             return
 
-        # Same logic as cancel
+        sale = self.sale_data
+        channel = self.bot.get_channel(sale["listing_channel_id"])
+
         try:
-            await self.message.delete()
-            for msg in self.extra_messages:
-                await msg.delete()
-        except Exception as e:
-            await interaction.response.send_message("⚠️ Error deleting listing messages.", ephemeral=True)
-            print(f"Error deleting listing: {e}")
-            return
+            main_msg = await channel.fetch_message(sale["listing_message_id"])
+            await main_msg.delete()
+        except discord.NotFound:
+            pass
 
-        await interaction.response.send_message("✅ Listing deleted.", ephemeral=True)
+        for msg_id in sale.get("extra_message_ids", []):
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.delete()
+            except discord.NotFound:
+                continue
+
+        await interaction.response.send_message("🗑️ Listing cancelled and removed.", ephemeral=True)
 
     @discord.ui.button(label="Edit Listing", style=discord.ButtonStyle.primary, custom_id="edit_listing", row=1)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -200,75 +201,95 @@ class BuyView(discord.ui.View):
         await interaction.response.send_modal(EditListingModal(self.message, self.sale_data, self.seller, self))
 
 class EditListingModal(discord.ui.Modal, title="Edit Your Listing"):
-    def __init__(self, original_embed: discord.Message, listing_data: dict, seller: discord.User, view: discord.ui.View):
+    def __init__(self, view):
         super().__init__()
-        self.original_embed = original_embed
-        self.listing_data = listing_data
-        self.seller = seller
-        self.view = view  # to update extra messages
+        self.view = view
+        self.sale = view.sale_data
 
-        self.description_input = discord.ui.TextInput(
-            label="Description",
+        self.description = discord.ui.TextInput(
+            label="New Description",
             style=discord.TextStyle.paragraph,
-            default=listing_data["description"][:4000],
-            max_length=4000
+            default=self.sale["description"],
+            required=True,
+            max_length=1024
         )
-        self.price_input = discord.ui.TextInput(
-            label="Price",
-            style=discord.TextStyle.short,
-            default=listing_data["price"],
+        self.price = discord.ui.TextInput(
+            label="New Price",
+            default=self.sale["price"],
+            required=True,
             max_length=100
         )
-
-        self.add_item(self.description_input)
-        self.add_item(self.price_input)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        self.listing_data["description"] = self.description_input.value
-        self.listing_data["price"] = self.price_input.value
-
-        await interaction.response.send_message(
-            "✅ Description and price updated!\n📸 If you'd like to update your listing images, please reply here with up to **3 new image attachments** within 60 seconds.",
-            ephemeral=True
+        self.replace_images = discord.ui.TextInput(
+            label="Replace Images? (yes/no)",
+            default="no",
+            required=True,
+            max_length=3
         )
 
-        def check(msg: discord.Message):
-            return (
-                msg.author.id == self.seller.id
-                and msg.channel == interaction.channel
-                and len(msg.attachments) > 0
-            )
+        self.add_item(self.description)
+        self.add_item(self.price)
+        self.add_item(self.replace_images)
 
+    async def on_submit(self, interaction: discord.Interaction):
+        self.sale["description"] = self.description.value
+        self.sale["price"] = self.price.value
+
+        await interaction.response.send_message("✅ Listing updated!", ephemeral=True)
+
+        # Delete old messages (main + extra)
+        channel = interaction.guild.get_channel(self.sale["listing_channel_id"])
         try:
-            msg = await interaction.client.wait_for("message", timeout=60.0, check=check)
+            main_msg = await channel.fetch_message(self.sale["listing_message_id"])
+            await main_msg.delete()
+        except discord.NotFound:
+            pass
 
-            new_attachments = msg.attachments[:3]
-            self.listing_data["attachments"] = new_attachments
+        for msg_id in self.sale.get("extra_message_ids", []):
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.delete()
+            except discord.NotFound:
+                continue
 
-            # Delete previous messages (extra image messages)
-            for old_msg in self.view.extra_messages:
-                try:
-                    await old_msg.delete()
-                except:
-                    pass
-            self.view.extra_messages.clear()
+        # Handle new images if requested
+        if self.replace_images.value.lower() == "yes":
+            await interaction.user.send("📸 Please upload up to 3 new images for your updated listing:")
 
-            # Rebuild embed and update
-            new_embed = build_listing_embed(self.listing_data, msg)
-            await self.original_embed.edit(embed=new_embed)
+            try:
+                dm_msg = await bot.wait_for(
+                    "message",
+                    check=lambda m: m.author == interaction.user and isinstance(m.channel,
+                                                                                discord.DMChannel) and m.attachments,
+                    timeout=120
+                )
+                # Store up to 3 new attachments
+                self.sale["attachments"] = dm_msg.attachments[:3]
 
-            # Re-send extra images
-            if len(new_attachments) > 1:
-                for attachment in new_attachments[1:3]:
-                    extra_msg = await self.original_embed.channel.send(attachment.url)
-                    self.view.extra_messages.append(extra_msg)
+            except asyncio.TimeoutError:
+                await interaction.user.send("❌ Timed out waiting for images. Keeping original images.")
+                # Keep original attachments
+                self.sale["attachments"] = self.sale.get("attachments", [])
+        else:
+            # Keep existing attachments
+            self.sale["attachments"] = self.sale.get("attachments", [])
 
-            await interaction.followup.send("✅ Images updated!", ephemeral=True)
+        # Rebuild embed with updated sale info & images
+        new_embed = build_listing_embed(self.sale, None)
+        new_view = TradeView(bot, seller=self.sale["user"], sale_data=self.sale)
+        new_msg = await channel.send(embed=new_embed, view=new_view)
+        new_view.message = new_msg
 
-        except asyncio.TimeoutError:
-            new_embed = build_listing_embed(self.listing_data, self.original_embed)
-            await self.original_embed.edit(embed=new_embed)
-            await interaction.followup.send("⚠️ No new images were uploaded. Listing text was updated.", ephemeral=True)
+        # Update stored message IDs
+        self.sale["listing_message_id"] = new_msg.id
+        self.sale["listing_channel_id"] = new_msg.channel.id
+        self.sale["extra_message_ids"] = []
+
+        # Send extra images as inline messages (if any)
+        attachments = self.sale.get("attachments", [])
+        if len(attachments) > 1:
+            for attachment in attachments[1:3]:  # Limit to 2 extra
+                img_msg = await channel.send(attachment.url)
+                self.sale["extra_message_ids"].append(img_msg.id)
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
@@ -533,28 +554,30 @@ async def on_message(message: discord.Message):
             else bot.get_channel(OSRS_IRON_CHANNEL_ID)
         )
 
-        # Build embed
+        if not view_channel:
+            await message.channel.send("❌ Could not find the appropriate listing channel.")
+            return
+
+        # Build the listing embed (with image if available)
         embed = build_listing_embed(sale, message)
 
-        # Create BuyView with reference to seller
-        view = BuyView(sale["user"])
-        view.sale_data = sale
+        # Create the view with buttons
+        view = TradeView(bot, seller=sale["user"], sale_data=sale)
 
-        # First message: embed with Trade and Cancel buttons
+        # Send the main message with embed and buttons
         embed_message = await view_channel.send(embed=embed, view=view)
-        view.message = embed_message  # So BuyView can delete it on cancel
+        view.message = embed_message
 
-        # Second message: post images individually and track them
-        if len(message.attachments) > 1:
-            await view_channel.send("📷 **Additional Images:**")
-            for attachment in message.attachments[1:3]:
-                msg = await view_channel.send(attachment.url)
-                view.extra_messages.append(msg)
-
-        # Save listing metadata
+        # Store message metadata for future deletion/editing
         sale["listing_message_id"] = embed_message.id
         sale["listing_channel_id"] = embed_message.channel.id
-        sale["attachments"] = message.attachments[:3]
+        sale["extra_message_ids"] = []
+
+        # Post extra attachments as separate image messages
+        if len(message.attachments) > 1:
+            for attachment in message.attachments[1:3]:
+                img_msg = await view_channel.send(attachment.url)
+                sale["extra_message_ids"].append(img_msg.id)
 
         await message.reply("✅ Your listing has been posted!")
         return
