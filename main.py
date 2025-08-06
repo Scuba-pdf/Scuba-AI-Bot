@@ -22,7 +22,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 OSRS_MAIN_CHANNEL_ID = 1393681123355394058
 OSRS_IRON_CHANNEL_ID = 1393671722636546088
 STAFF_ROLE_ID = 1399572599054536866  # Replace it with your real staff role ID
-TRADE_CATEGORY_ID = 1400006384241868901  # Replace it with your private category ID
+TRADE_CATEGORY_ID = 1402544026032541768  # Replace it with your private category ID
 COMPLETED_SALES_CHANNEL_ID = 1402544168034766850  # Replace it with your real log channel ID
 VOUCH_LOG_CHANNEL_ID = 1399553110841622660  # Replace it with your vouch log channel ID
 
