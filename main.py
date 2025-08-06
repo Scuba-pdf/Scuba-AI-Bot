@@ -133,7 +133,7 @@ class BuyView(discord.ui.View):
         self.seller = seller
         self.sale_data = sale_data
 
-    @discord.ui.button(label="Buy", style=discord.ButtonStyle.green, custom_id="buy_account")
+    @discord.ui.button(label="Trade", style=discord.ButtonStyle.green, custom_id="buy_account")
     async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         buyer = interaction.user
@@ -459,12 +459,15 @@ async def on_message(message: discord.Message):
         view = BuyView(sale["user"])
         view.sale_data = sale
 
-        # Send the second message with a title and buy button
-        await view_channel.send("📷 **Additional Images:**", view=view)
+        # First message: embed + Trade button
+        embed_message = await view_channel.send(embed=embed, view=view)
+        view.message = embed_message  # So BuyView has reference to it
 
-        # Send each image directly (so they render in full)
-        for attachment in message.attachments[1:3]:  # Max 2 extra
-            await view_channel.send(attachment.url)
+        # Second message: raw images
+        if len(message.attachments) > 1:
+            await view_channel.send("📷 **Additional Images:**")
+            for attachment in message.attachments[1:3]:  # Send each to show inline
+                await view_channel.send(attachment.url)
 
         # Save listing metadata for deletion later
         sale["listing_message_id"] = embed_message.id
