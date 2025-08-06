@@ -169,27 +169,65 @@ class BuyView(discord.ui.View):
             f"✅ Trade channel created: {trade_channel.mention}", ephemeral=True
         )
 
-    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel_listing")
-    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Delete Listing", style=discord.ButtonStyle.danger, custom_id="delete_listing", row=1)
+    async def delete(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.seller.id:
-            await interaction.response.send_message("❌ Only the seller can cancel this listing.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the seller can delete this listing.", ephemeral=True)
             return
 
-        # Delete the main message
+        # Same logic as cancel
         try:
-            if self.message:
-                await self.message.delete()
-        except Exception as e:
-            print(f"⚠️ Failed to delete main message: {e}")
-
-        # Delete any additional messages
-        for msg in self.extra_messages:
-            try:
+            await self.message.delete()
+            for msg in self.extra_messages:
                 await msg.delete()
-            except Exception as e:
-                print(f"⚠️ Failed to delete extra message: {e}")
+        except Exception as e:
+            await interaction.response.send_message("⚠️ Error deleting listing messages.", ephemeral=True)
+            print(f"Error deleting listing: {e}")
+            return
 
-        await interaction.response.send_message("❌ Listing deleted.", ephemeral=True)
+        await interaction.response.send_message("✅ Listing deleted.", ephemeral=True)
+
+    @discord.ui.button(label="Edit Listing", style=discord.ButtonStyle.primary, custom_id="edit_listing", row=1)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.seller.id:
+            await interaction.response.send_message("❌ Only the seller can edit this listing.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(EditListingModal(self.message, self.sale_data))
+
+class EditListingModal(discord.ui.Modal, title="Edit Your Listing"):
+    def __init__(self, original_embed: discord.Message, listing_data: dict):
+        super().__init__()
+        self.original_embed = original_embed
+        self.listing_data = listing_data
+
+        # Prefill values from original listing
+        self.description_input = discord.ui.TextInput(
+            label="Description",
+            style=discord.TextStyle.paragraph,
+            default=listing_data["description"][:4000],  # Discord max
+            max_length=4000
+        )
+        self.price_input = discord.ui.TextInput(
+            label="Price",
+            style=discord.TextStyle.short,
+            default=listing_data["price"],
+            max_length=100
+        )
+
+        self.add_item(self.description_input)
+        self.add_item(self.price_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Update listing data
+        self.listing_data["description"] = self.description_input.value
+        self.listing_data["price"] = self.price_input.value
+
+        # Rebuild embed and update the original message
+        new_embed = build_listing_embed(self.listing_data, self.original_embed)
+
+        await self.original_embed.edit(embed=new_embed)
+        await interaction.response.send_message("✅ Listing updated!", ephemeral=True)
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
