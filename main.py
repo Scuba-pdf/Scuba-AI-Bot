@@ -562,16 +562,19 @@ async def on_message(message: discord.Message):
         embed = build_listing_embed(sale, message)
 
         # Create the view with buttons
-        view = TradeView(bot, seller=sale["user"], sale_data=sale)
+        view = TradeView(sale["user"], sale)
 
         # Send the main message with embed and buttons
         embed_message = await view_channel.send(embed=embed, view=view)
         view.message = embed_message
 
+        sale["extra_message_ids"] = []
+
+        attachments = message.attachments
+
         # Store message metadata for future deletion/editing
         sale["listing_message_id"] = embed_message.id
         sale["listing_channel_id"] = embed_message.channel.id
-        sale["extra_message_ids"] = []
 
         # Post extra attachments as separate image messages
         if len(message.attachments) > 1:
