@@ -41,6 +41,37 @@ def extract_price_value(price_str: str) -> int:
     return int(match.group(1)) if match else 0
 
 # === UI Views ===
+def build_listing_embed(sale, message):
+    embed = discord.Embed(
+        title=f"💼 {sale['account_type']} Listing",
+        description=(
+            "╔══════════════════════════════╗\n"
+            "  📜 **Description**\n"
+            f"  {sale['description'][:1024]}\n"
+            "╚══════════════════════════════╝"
+        ),
+        color=discord.Color.from_rgb(255, 204, 0)  # OSRS gold/yellow
+    )
+
+    embed.add_field(name="💰 Price", value=sale["price"], inline=True)
+    embed.add_field(name="🧑 Seller", value=sale["user"].mention, inline=True)
+
+    # Footer with profile picture
+    embed.set_footer(
+        text=f"Press the button below to initiate a trade with {sale['user'].display_name}.",
+        icon_url=sale["user"].display_avatar.url if sale["user"].display_avatar else None
+    )
+
+    # Add up to 3 image attachments
+    if message.attachments:
+        for i, attachment in enumerate(message.attachments[:3]):
+            if i == 0:
+                embed.set_image(url=attachment.url)
+            else:
+                embed.add_field(name=f"📷 Image {i+1}", value=f"[Click to view]({attachment.url})", inline=False)
+
+    return embed
+
 class BuyView(discord.ui.View):
     def __init__(self, seller):
         super().__init__(timeout=None)
@@ -407,20 +438,7 @@ async def on_message(message: discord.Message):
             else bot.get_channel(OSRS_IRON_CHANNEL_ID)
         )
 
-        embed = discord.Embed(
-            title=f"🧾 {sale['account_type']} for Sale",
-            description=sale["description"],
-            color=discord.Color.gold()
-        )
-        embed.add_field(name="Price", value=sale["price"])
-
-        embed.set_footer(
-            text=f"Seller: {sale['user']}",
-            icon_url=getattr(sale["user"].display_avatar, 'url', None)
-        )
-
-        if message.attachments:
-            embed.set_image(url=message.attachments[0].url)
+        embed = build_listing_embed(sale, message)
 
         view = BuyView(sale["user"])
         sent_message = await view_channel.send(embed=embed, view=view)
