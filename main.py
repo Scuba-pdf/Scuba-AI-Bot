@@ -199,16 +199,19 @@ class TradeCompleteView(discord.ui.View):
         channel = interaction.channel
         status = "completed" if completed else "canceled"
 
-        # Lock the channel
-        await channel.edit(overwrites={
-            role: discord.PermissionOverwrite(view_channel=False)
-            for role in channel.overwrites
-        })
+        # Lock the channel (optional — you can comment this out to test)
+        try:
+            await channel.edit(overwrites={
+                role: discord.PermissionOverwrite(view_channel=False)
+                for role in channel.overwrites
+            })
+        except Exception as e:
+            print(f"⚠️ Failed to lock channel: {e}")
 
+        # DM both users
         if completed:
-            trade_id = str(uuid.uuid4())  # unique ID for this trade
+            trade_id = str(uuid.uuid4())
 
-            # Send vouch request with star buttons
             for user, role in [(self.buyer, "buyer"), (self.seller, "seller")]:
                 try:
                     dm = await user.create_dm()
@@ -220,13 +223,12 @@ class TradeCompleteView(discord.ui.View):
                             role=role,
                             trade_id=trade_id,
                             other_party=self.seller if role == "buyer" else self.buyer,
-                            sale_data=self.sale_data
+                            account_info=self.sale_data
                         )
                     )
                 except discord.Forbidden:
-                    pass
+                    print(f"⚠️ Couldn't DM {user} for vouch request.")
         else:
-            # Optional: Notify that trade was canceled
             for user in (self.buyer, self.seller):
                 try:
                     dm = await user.create_dm()
@@ -234,10 +236,14 @@ class TradeCompleteView(discord.ui.View):
                 except discord.Forbidden:
                     pass
 
-        await asyncio.sleep(5)  # brief pause for a final message to land
+        await asyncio.sleep(5)
 
-        # Delete the trade channel
-        await channel.delete(reason=f"Trade {status} closed and channel auto-deleted")
+        # Delete the channel (with proper error handling)
+        try:
+            await channel.delete(reason=f"Trade {status} closed and channel auto-deleted")
+            print(f"✅ Channel {channel.name} deleted.")
+        except Exception as e:
+            print(f"❌ Failed to delete channel: {e}")
 
 class VouchRequestView(discord.ui.View):
     def __init__(self, buyer, seller, sale_data):
