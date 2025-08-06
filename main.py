@@ -46,19 +46,21 @@ def build_listing_embed(sale, message):
         title=f"💼 {sale['account_type']} Listing",
         description=(
             "╔══════════════════════════════╗\n"
+            
             "  📜 **Description**\n"
             f"  {sale['description'][:1024]}\n"
+            
             "╚══════════════════════════════╝"
         ),
         color=discord.Color.from_rgb(255, 204, 0)  # OSRS gold/yellow
     )
 
-    embed.add_field(name="💰 Price", value=sale["price"], inline=True)
+    embed.add_field(name="💰 Listing Price", value=sale["price"], inline=True)
     embed.add_field(name="🧑 Seller", value=sale["user"].mention, inline=True)
 
     # Footer with profile picture
     embed.set_footer(
-        text=f"Press the button below to initiate a trade with {sale['user'].display_name}.",
+        text=f"Press the button below to initiate a trade and open a private channel with {sale['user'].display_name}.",
         icon_url=sale["user"].display_avatar.url if sale["user"].display_avatar else None
     )
 
@@ -438,18 +440,21 @@ async def on_message(message: discord.Message):
             else bot.get_channel(OSRS_IRON_CHANNEL_ID)
         )
 
+        # Build the embed (uses your custom embed function with first image)
         embed = build_listing_embed(sale, message)
 
+        # Create Buy button UI
         view = BuyView(sale["user"])
         sent_message = await view_channel.send(embed=embed, view=view)
         view.message = sent_message
 
-        # Save original listing message ID in sale data for deletion later
-        sale["listing_message_id"] = sent_message.id
-        # Save the channel ID too, in case needed
-        sale["listing_channel_id"] = sent_message.channel.id
+        # Send additional images (beyond the first one shown in embed)
+        for attachment in message.attachments[1:3]:  # Only if there's more than one
+            await view_channel.send(attachment.url)
 
-        # Also store sale data inside BuyView for passing later
+        # Save message metadata
+        sale["listing_message_id"] = sent_message.id
+        sale["listing_channel_id"] = sent_message.channel.id
         view.sale_data = sale
 
         await message.reply("✅ Your listing has been posted!")
