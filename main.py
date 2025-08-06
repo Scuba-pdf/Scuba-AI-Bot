@@ -443,7 +443,7 @@ async def on_message(message: discord.Message):
         # Prepare second embed with additional images
         additional_embed = discord.Embed(
             title="📷 Additional Images",
-            description="More screenshots provided by the seller.",
+            description="More pictures provided by the seller.",
             color=discord.Color.dark_gold()
         )
 
@@ -455,13 +455,16 @@ async def on_message(message: discord.Message):
                 inline=False
             )
 
-        # Create the Buy button view
+        # Create Buy button view
         view = BuyView(sale["user"])
         view.sale_data = sale
 
-        # Send the second message with images and Buy button
-        second_message = await view_channel.send(embed=additional_embed, view=view)
-        view.message = second_message
+        # Send the second message with a title and buy button
+        await view_channel.send("📷 **Additional Images:**", view=view)
+
+        # Send each image directly (so they render in full)
+        for attachment in message.attachments[1:3]:  # Max 2 extra
+            await view_channel.send(attachment.url)
 
         # Save listing metadata for deletion later
         sale["listing_message_id"] = embed_message.id
