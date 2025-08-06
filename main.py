@@ -57,15 +57,19 @@ def build_listing_embed(sale, message):
 
     # Footer with profile picture
     embed.set_footer(
-        text=f"Press the button below to initiate a trade and open a private channel with {sale['user'].display_name}.",
+        text=f"Press the button below to initiate a trade with {sale['user'].display_name}.",
         icon_url=sale["user"].display_avatar.url if sale["user"].display_avatar else None
     )
 
-    # Add up to 3 image attachments
-    if message.attachments:
-        for i, attachment in enumerate(message.attachments[:3]):
+    # Use sale["attachments"] if it exists, otherwise fallback to message.attachments (for initial posting)
+    attachments = sale.get("attachments") or (message.attachments if message else [])
+
+    if attachments:
+        for i, attachment in enumerate(attachments[:3]):
             if i == 0:
                 embed.set_image(url=attachment.url)
+            else:
+                embed.add_field(name=f"📷 Image {i + 1}", value=f"[Click to view]({attachment.url})", inline=False)
 
     return embed
 
@@ -193,19 +197,20 @@ class BuyView(discord.ui.View):
             await interaction.response.send_message("❌ Only the seller can edit this listing.", ephemeral=True)
             return
 
-        await interaction.response.send_modal(EditListingModal(self.message, self.sale_data))
+        await interaction.response.send_modal(EditListingModal(self.message, self.sale_data, self.seller, self))
 
 class EditListingModal(discord.ui.Modal, title="Edit Your Listing"):
-    def __init__(self, original_embed: discord.Message, listing_data: dict):
+    def __init__(self, original_embed: discord.Message, listing_data: dict, seller: discord.User, view: discord.ui.View):
         super().__init__()
         self.original_embed = original_embed
         self.listing_data = listing_data
+        self.seller = seller
+        self.view = view  # to update extra messages
 
-        # Prefill values from original listing
         self.description_input = discord.ui.TextInput(
             label="Description",
             style=discord.TextStyle.paragraph,
-            default=listing_data["description"][:4000],  # Discord max
+            default=listing_data["description"][:4000],
             max_length=4000
         )
         self.price_input = discord.ui.TextInput(
@@ -219,15 +224,51 @@ class EditListingModal(discord.ui.Modal, title="Edit Your Listing"):
         self.add_item(self.price_input)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Update listing data
         self.listing_data["description"] = self.description_input.value
         self.listing_data["price"] = self.price_input.value
 
-        # Rebuild embed and update the original message
-        new_embed = build_listing_embed(self.listing_data, self.original_embed)
+        await interaction.response.send_message(
+            "✅ Description and price updated!\n📸 If you'd like to update your listing images, please reply here with up to **3 new image attachments** within 60 seconds.",
+            ephemeral=True
+        )
 
-        await self.original_embed.edit(embed=new_embed)
-        await interaction.response.send_message("✅ Listing updated!", ephemeral=True)
+        def check(msg: discord.Message):
+            return (
+                msg.author.id == self.seller.id
+                and msg.channel == interaction.channel
+                and len(msg.attachments) > 0
+            )
+
+        try:
+            msg = await interaction.client.wait_for("message", timeout=60.0, check=check)
+
+            new_attachments = msg.attachments[:3]
+            self.listing_data["attachments"] = new_attachments
+
+            # Delete previous messages (extra image messages)
+            for old_msg in self.view.extra_messages:
+                try:
+                    await old_msg.delete()
+                except:
+                    pass
+            self.view.extra_messages.clear()
+
+            # Rebuild embed and update
+            new_embed = build_listing_embed(self.listing_data, msg)
+            await self.original_embed.edit(embed=new_embed)
+
+            # Re-send extra images
+            if len(new_attachments) > 1:
+                for attachment in new_attachments[1:3]:
+                    extra_msg = await self.original_embed.channel.send(attachment.url)
+                    self.view.extra_messages.append(extra_msg)
+
+            await interaction.followup.send("✅ Images updated!", ephemeral=True)
+
+        except asyncio.TimeoutError:
+            new_embed = build_listing_embed(self.listing_data, self.original_embed)
+            await self.original_embed.edit(embed=new_embed)
+            await interaction.followup.send("⚠️ No new images were uploaded. Listing text was updated.", ephemeral=True)
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
@@ -513,6 +554,7 @@ async def on_message(message: discord.Message):
         # Save listing metadata
         sale["listing_message_id"] = embed_message.id
         sale["listing_channel_id"] = embed_message.channel.id
+        sale["attachments"] = message.attachments[:3]
 
         await message.reply("✅ Your listing has been posted!")
         return
