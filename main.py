@@ -589,7 +589,9 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_ready():
-    bot.add_view(SaleView())  # Needed for persistent buttons
+    bot.add_view(SaleView())  # For your initial buttons
+    # Also add views for views that show on listings:
+    bot.add_view(TradeView(None))  # You may need to add with dummy args or refactor
     print(f"Logged in as {bot.user}")
 
 # === Start Bot ===
