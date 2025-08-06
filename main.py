@@ -285,18 +285,16 @@ class VouchModal(discord.ui.Modal):
         await interaction.response.send_message("Thanks for your vouch!", ephemeral=True)
 
 class StarRatingView(discord.ui.View):
-    def __init__(self, user, rater, trade_id, role, other_party, account_info, sale_data):
+    def __init__(self, rater, trade_id, role, other_party, account_info):
         super().__init__(timeout=300)
-        view = StarRatingView(
-            rater=user,
-            trade_id=trade_id,
-            role=role,
-            other_party=self.seller if role == "buyer" else self.buyer,
-            account_info=self.sale_data
-        )
+        self.rater = rater
+        self.trade_id = trade_id
+        self.role = role
+        self.other_party = other_party
+        self.account_info = account_info
 
         for i in range(1, 6):
-            self.add_item(self.StarButton(i))
+            self.add_item(self.StarButton(i, self))  # Add buttons correctly
 
     class StarButton(discord.ui.Button):
         def __init__(self, stars: int, parent_view: "StarRatingView"):
