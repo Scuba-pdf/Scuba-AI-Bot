@@ -168,20 +168,6 @@ class TradeCompleteView(discord.ui.View):
     async def finalize_trade(self, interaction: discord.Interaction):
         await interaction.channel.send("🎉 Both parties marked the trade as complete! Archiving channel...")
 
-        # Delete an original listing message if possible
-        try:
-            listing_channel_id = self.sale_data.get("listing_channel_id")
-            listing_message_id = self.sale_data.get("listing_message_id")
-            if listing_channel_id and listing_message_id:
-                listing_channel = interaction.guild.get_channel(listing_channel_id)
-                if listing_channel:
-                    msg = await listing_channel.fetch_message(listing_message_id)
-                    await msg.delete()
-        except Exception as e:
-            print(f"Failed to delete listing message: {e}")
-
-        await self.end_trade(interaction, completed=True)
-
         # Log the sale
         log_channel = interaction.guild.get_channel(COMPLETED_SALES_CHANNEL_ID)
         if log_channel:
