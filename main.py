@@ -127,10 +127,12 @@ class SaleModal(discord.ui.Modal):
             await interaction.response.send_message("❌ I can't DM you. Please enable DMs from server members.", ephemeral=True)
 
 class TradeView(discord.ui.View):
-    def __init__(self, seller, sale_data=None):
+    def __init__(self, bot, seller, sale_data=None):
         super().__init__(timeout=None)
-        self.seller = seller
+        self.bot = bot
         self.sale_data = sale_data
+        self.seller = seller
+        self.message = None
 
     @discord.ui.button(label="Trade", style=discord.ButtonStyle.green, custom_id="buy_account")
     async def trade(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -169,14 +171,13 @@ class TradeView(discord.ui.View):
         )
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
-    async def cancel_listing(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user != self.seller:
-            await interaction.response.send_message("Only the seller can cancel this listing.", ephemeral=True)
+    async def cancel_listing(self, interaction: discord.Interaction):
+        sale = self.sale_data
+        if interaction.user.id != sale["user"].id:
+            await interaction.response.send_message("❌ Only the seller can cancel this listing.", ephemeral=True)
             return
 
-        sale = self.sale_data
-        channel = self.bot.get_channel(sale["listing_channel_id"])
-
+        channel = interaction.channel
         try:
             main_msg = await channel.fetch_message(sale["listing_message_id"])
             await main_msg.delete()
@@ -190,7 +191,8 @@ class TradeView(discord.ui.View):
             except discord.NotFound:
                 continue
 
-        await interaction.response.send_message("🗑️ Listing cancelled and removed.", ephemeral=True)
+        bot.temp_sales.pop(sale["user"].id, None)
+        await interaction.response.send_message("✅ Listing has been canceled and deleted.", ephemeral=True)
 
     @discord.ui.button(label="Edit Listing", style=discord.ButtonStyle.primary, custom_id="edit_listing", row=1)
     async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -567,18 +569,16 @@ async def on_message(message: discord.Message):
         # Send the main message with embed and buttons
         embed_message = await view_channel.send(embed=embed, view=view)
         view.message = embed_message
-
-        sale["extra_message_ids"] = []
-
         attachments = message.attachments
 
         # Store message metadata for future deletion/editing
         sale["listing_message_id"] = embed_message.id
         sale["listing_channel_id"] = embed_message.channel.id
 
-        # Post extra attachments as separate image messages
+        sale["extra_message_ids"] = []
+
         if len(message.attachments) > 1:
-            for attachment in message.attachments[1:3]:
+            for attachment in message.attachments[1:3]:  # Max 2 extra
                 img_msg = await view_channel.send(attachment.url)
                 sale["extra_message_ids"].append(img_msg.id)
 
@@ -589,9 +589,8 @@ async def on_message(message: discord.Message):
 
 @bot.event
 async def on_ready():
-    bot.add_view(SaleView())  # For your initial buttons
-    # Also add views for views that show on listings:
-    bot.add_view(TradeView(None))  # You may need to add with dummy args or refactor
+    bot.add_view(SaleView())
+    bot.add_view(TradeView(None, None))  # For persistent buttons
     print(f"Logged in as {bot.user}")
 
 # === Start Bot ===
