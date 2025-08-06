@@ -181,6 +181,20 @@ class TradeCompleteView(discord.ui.View):
             embed.set_footer(text=f"Buyer: {self.buyer} • Seller: {self.seller}")
             await log_channel.send(embed=embed)
 
+            # Delete an original listing message if possible
+            try:
+                listing_channel_id = self.sale_data.get("listing_channel_id")
+                listing_message_id = self.sale_data.get("listing_message_id")
+                if listing_channel_id and listing_message_id:
+                    listing_channel = interaction.guild.get_channel(listing_channel_id)
+                    if listing_channel:
+                        msg = await listing_channel.fetch_message(listing_message_id)
+                        await msg.delete()
+            except Exception as e:
+                print(f"Failed to delete listing message: {e}")
+
+            await self.end_trade(interaction, completed=True)
+
     async def end_trade(self, interaction: discord.Interaction, completed: bool):
         channel = interaction.channel
         status = "completed" if completed else "canceled"
