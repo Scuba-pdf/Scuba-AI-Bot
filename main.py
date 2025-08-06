@@ -236,7 +236,6 @@ class EditListingModal(discord.ui.Modal, title="Edit Your Listing"):
         self.sale["description"] = self.description.value
         self.sale["price"] = self.price.value
 
-        await interaction.response.send_message("✅ Listing updated!", ephemeral=True)
 
         # Delete old messages (main + extra)
         channel = interaction.guild.get_channel(self.sale["listing_channel_id"])
@@ -292,6 +291,8 @@ class EditListingModal(discord.ui.Modal, title="Edit Your Listing"):
             for attachment in attachments[1:3]:  # Limit to 2 extra
                 img_msg = await channel.send(attachment.url)
                 self.sale["extra_message_ids"].append(img_msg.id)
+
+        await interaction.response.send_message("✅ Listing updated!", ephemeral=True)
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
@@ -560,14 +561,13 @@ async def on_message(message: discord.Message):
             await message.channel.send("❌ Could not find the appropriate listing channel.")
             return
 
+        view = TradeView(bot, seller=sale["user"], sale_data=sale)
+
         # Build the listing embed (with image if available)
         embed = build_listing_embed(sale, message)
-
-        # Create the view with buttons
-        view = TradeView(sale["user"], sale)
-
-        # Send the main message with embed and buttons
         embed_message = await view_channel.send(embed=embed, view=view)
+
+        # Set message reference for later use
         view.message = embed_message
         attachments = message.attachments
 
