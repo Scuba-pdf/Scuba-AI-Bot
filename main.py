@@ -134,7 +134,7 @@ class BuyView(discord.ui.View):
         self.sale_data = sale_data
 
     @discord.ui.button(label="Trade", style=discord.ButtonStyle.green, custom_id="buy_account")
-    async def buy(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def trade(self, interaction: discord.Interaction, button: discord.ui.Button):
         guild = interaction.guild
         buyer = interaction.user
         seller = self.seller
@@ -145,7 +145,7 @@ class BuyView(discord.ui.View):
             await interaction.response.send_message("❌ Config error. Contact staff.", ephemeral=True)
             return
 
-        # Permissions
+        # Set up permissions
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             buyer: discord.PermissionOverwrite(view_channel=True, send_messages=True),
@@ -153,7 +153,7 @@ class BuyView(discord.ui.View):
             staff_role: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         }
 
-        # Create a channel
+        # Create private trade channel
         trade_channel = await guild.create_text_channel(
             name=f"trade-{buyer.name}",
             category=category,
@@ -168,6 +168,21 @@ class BuyView(discord.ui.View):
         await interaction.response.send_message(
             f"✅ Trade channel created: {trade_channel.mention}", ephemeral=True
         )
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.danger, custom_id="cancel_listing")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.seller.id:
+            await interaction.response.send_message("❌ Only the seller can cancel this listing.", ephemeral=True)
+            return
+
+        try:
+            await interaction.message.delete()
+        except Exception as e:
+            print(f"⚠️ Failed to delete listing message: {e}")
+            await interaction.response.send_message("⚠️ Couldn't delete the listing message.", ephemeral=True)
+            return
+
+        await interaction.response.send_message("❌ Listing deleted.", ephemeral=True)
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
@@ -419,11 +434,11 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    await bot.process_commands(message)
-
     if isinstance(message.channel, discord.DMChannel) and message.attachments:
         user_id = message.author.id
         sale = bot.temp_sales.pop(user_id, None)
+
+        await bot.process_commands(message)
 
         if not sale:
             await message.channel.send("❌ You don't have an active listing. Please start one using the market button in the server.")
