@@ -357,13 +357,13 @@ class VouchCommentModal(discord.ui.Modal, title="Leave a Vouch"):
                 description=f"**Account:** {self.account_info['account_type']}\n**Price:** {self.account_info['price']}\n"
             )
             embed.add_field(
-                name=f"{buyer['rater'].mention} (Buyer) - {'⭐' * buyer['rating']}",
-                value=buyer['comment'] or "No comment provided.",
+                name=f"Buyer - {'⭐' * buyer['rating']}",
+                value=f"{buyer['rater'].mention}\n{buyer['comment'] or 'No comment provided.'}",
                 inline=False
             )
             embed.add_field(
-                name=f"{seller['rater'].mention} (Seller) - {'⭐' * seller['rating']}",
-                value=seller['comment'] or "No comment provided.",
+                name=f"Seller - {'⭐' * seller['rating']}",
+                value=f"{seller['rater'].mention}\n{seller['comment'] or 'No comment provided.'}",
                 inline=False
             )
             await channel.send(embed=embed)
