@@ -175,12 +175,19 @@ class BuyView(discord.ui.View):
             await interaction.response.send_message("❌ Only the seller can cancel this listing.", ephemeral=True)
             return
 
+        # Delete the main message
         try:
-            await interaction.message.delete()
+            if self.message:
+                await self.message.delete()
         except Exception as e:
-            print(f"⚠️ Failed to delete listing message: {e}")
-            await interaction.response.send_message("⚠️ Couldn't delete the listing message.", ephemeral=True)
-            return
+            print(f"⚠️ Failed to delete main message: {e}")
+
+        # Delete any additional messages
+        for msg in self.extra_messages:
+            try:
+                await msg.delete()
+            except Exception as e:
+                print(f"⚠️ Failed to delete extra message: {e}")
 
         await interaction.response.send_message("❌ Listing deleted.", ephemeral=True)
 
@@ -435,11 +442,7 @@ async def on_message(message: discord.Message):
         return
 
     if isinstance(message.channel, discord.DMChannel) and message.attachments:
-        user_id = message.author.id
-        sale = bot.temp_sales.pop(user_id, None)
-
-        await bot.process_commands(message)
-
+        sale = bot.temp_sales.get(message.author.id)
         if not sale:
             await message.channel.send("❌ You don't have an active listing. Please start one using the market button in the server.")
             return
@@ -451,44 +454,32 @@ async def on_message(message: discord.Message):
             else bot.get_channel(OSRS_IRON_CHANNEL_ID)
         )
 
-        # Build and send the main embed (with first image only)
+        # Build embed
         embed = build_listing_embed(sale, message)
-        embed_message = await view_channel.send(embed=embed)
 
-        # Prepare second embed with additional images
-        additional_embed = discord.Embed(
-            title="📷 Additional Images",
-            description="More pictures provided by the seller.",
-            color=discord.Color.dark_gold()
-        )
-
-        extra_attachments = message.attachments[1:3]  # Limit to 2 extra
-        for i, attachment in enumerate(extra_attachments, start=2):
-            additional_embed.add_field(
-                name=f"Image {i}",
-                value=attachment.url,
-                inline=False
-            )
-
-        # Create Buy button view
+        # Create BuyView with reference to seller
         view = BuyView(sale["user"])
         view.sale_data = sale
 
-        # First message: embed + Trade button
+        # First message: embed with Trade and Cancel buttons
         embed_message = await view_channel.send(embed=embed, view=view)
-        view.message = embed_message  # So BuyView has reference to it
+        view.message = embed_message  # So BuyView can delete it on cancel
 
-        # Second message: raw images
+        # Second message: post images individually and track them
         if len(message.attachments) > 1:
             await view_channel.send("📷 **Additional Images:**")
-            for attachment in message.attachments[1:3]:  # Send each to show inline
-                await view_channel.send(attachment.url)
+            for attachment in message.attachments[1:3]:
+                msg = await view_channel.send(attachment.url)
+                view.extra_messages.append(msg)
 
-        # Save listing metadata for deletion later
+        # Save listing metadata
         sale["listing_message_id"] = embed_message.id
         sale["listing_channel_id"] = embed_message.channel.id
 
         await message.reply("✅ Your listing has been posted!")
+        return
+
+    await bot.process_commands(message)
 
 @bot.event
 async def on_ready():
