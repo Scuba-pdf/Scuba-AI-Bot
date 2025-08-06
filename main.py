@@ -45,12 +45,9 @@ def build_listing_embed(sale, message):
     embed = discord.Embed(
         title=f"💼 {sale['account_type']} Listing",
         description=(
-            "╔══════════════════════════════╗\n"
-            
             "  📜 **Description**\n"
             f"  {sale['description'][:1024]}\n"
-            
-            "╚══════════════════════════════╝"
+
         ),
         color=discord.Color.from_rgb(255, 204, 0)  # OSRS gold/yellow
     )
@@ -69,8 +66,6 @@ def build_listing_embed(sale, message):
         for i, attachment in enumerate(message.attachments[:3]):
             if i == 0:
                 embed.set_image(url=attachment.url)
-            else:
-                embed.add_field(name=f"📷 Image {i+1}", value=f"[Click to view]({attachment.url})", inline=False)
 
     return embed
 
@@ -434,28 +429,43 @@ async def on_message(message: discord.Message):
             await message.channel.send("❌ You don't have an active listing. Please start one using the market button in the server.")
             return
 
+        # Determine which channel to post in
         view_channel = (
             bot.get_channel(OSRS_MAIN_CHANNEL_ID)
             if sale["account_type"].startswith("Main")
             else bot.get_channel(OSRS_IRON_CHANNEL_ID)
         )
 
-        # Build the embed (uses your custom embed function with first image)
+        # Build and send the main embed (with first image only)
         embed = build_listing_embed(sale, message)
+        embed_message = await view_channel.send(embed=embed)
 
-        # Create Buy button UI
+        # Prepare second embed with additional images
+        additional_embed = discord.Embed(
+            title="📷 Additional Images",
+            description="More screenshots provided by the seller.",
+            color=discord.Color.dark_gold()
+        )
+
+        extra_attachments = message.attachments[1:3]  # Limit to 2 extra
+        for i, attachment in enumerate(extra_attachments, start=2):
+            additional_embed.add_field(
+                name=f"Image {i}",
+                value=attachment.url,
+                inline=False
+            )
+
+        # Create the Buy button view
         view = BuyView(sale["user"])
-        sent_message = await view_channel.send(embed=embed, view=view)
-        view.message = sent_message
-
-        # Send additional images (beyond the first one shown in embed)
-        for attachment in message.attachments[1:3]:  # Only if there's more than one
-            await view_channel.send(attachment.url)
-
-        # Save message metadata
-        sale["listing_message_id"] = sent_message.id
-        sale["listing_channel_id"] = sent_message.channel.id
         view.sale_data = sale
+
+        # Send the second message with images and Buy button
+        second_message = await view_channel.send(embed=additional_embed, view=view)
+        view.message = second_message
+
+        # Save listing metadata for deletion later
+        sale["listing_message_id"] = embed_message.id
+        sale["listing_channel_id"] = embed_message.channel.id
 
         await message.reply("✅ Your listing has been posted!")
 
