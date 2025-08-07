@@ -217,6 +217,61 @@ class TradeView(discord.ui.View):
         except Exception as e:
             print(f"❌ Failed to send confirmation: {e}")
 
+    @discord.ui.button(label="✏️ Edit", style=discord.ButtonStyle.secondary)
+    async def edit_listing(self, interaction: discord.Interaction, button: discord.ui.Button):
+        sale = self.sale_data
+
+        if not sale or interaction.user.id != sale["user"].id:
+            await interaction.response.send_message("❌ Only the seller can edit this listing.", ephemeral=True)
+            return
+
+        # Show modal with current values pre-filled
+        await interaction.response.send_modal(EditSaleModal(sale, self))
+
+class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
+    def __init__(self, sale_data, trade_view: TradeView):
+        super().__init__()
+
+        self.sale_data = sale_data
+        self.trade_view = trade_view
+
+        self.account_type = discord.ui.TextInput(
+            label="Account Type",
+            default=sale_data["account_type"],
+            required=True
+        )
+        self.price = discord.ui.TextInput(
+            label="Price",
+            default=sale_data["price"],
+            required=True
+        )
+        self.description = discord.ui.TextInput(
+            label="Description",
+            style=discord.TextStyle.paragraph,
+            default=sale_data["description"],
+            required=True
+        )
+
+        self.add_item(self.account_type)
+        self.add_item(self.price)
+        self.add_item(self.description)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Update the sale data
+        self.sale_data["account_type"] = self.account_type.value
+        self.sale_data["price"] = self.price.value
+        self.sale_data["description"] = self.description.value
+
+        # Update the embed message
+        try:
+            channel = interaction.guild.get_channel(self.sale_data["listing_channel_id"])
+            message = await channel.fetch_message(self.sale_data["listing_message_id"])
+            new_embed = build_listing_embed(self.sale_data, message)
+            await message.edit(embed=new_embed)
+            await interaction.response.send_message("✅ Listing updated successfully!", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Error updating listing: {e}")
+            await interaction.response.send_message("❌ Failed to update listing. Contact staff.", ephemeral=True)
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
