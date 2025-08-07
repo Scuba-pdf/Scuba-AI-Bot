@@ -171,11 +171,19 @@ class TradeView(discord.ui.View):
         )
 
     @discord.ui.button(label="❌ Cancel", style=discord.ButtonStyle.danger)
-    async def cancel_listing(self, interaction: discord.Interaction):
+    async def cancel_listing(self, interaction: discord.Interaction, button: discord.ui.Button):
         sale = self.sale_data
+
+        # Safety check
+        if not sale:
+            await interaction.response.send_message("❌ Sale data missing.", ephemeral=True)
+            return
+
         if interaction.user.id != sale["user"].id:
             await interaction.response.send_message("❌ Only the seller can cancel this listing.", ephemeral=True)
             return
+
+        await interaction.response.defer(ephemeral=True)  # Prevent "interaction failed"
 
         try:
             guild = interaction.guild
@@ -190,7 +198,7 @@ class TradeView(discord.ui.View):
                 except discord.NotFound:
                     pass
 
-            # Delete any extra image messages
+            # Delete extra image messages
             for extra_id in sale.get("extra_message_ids", []):
                 try:
                     msg = await listing_channel.fetch_message(extra_id)
@@ -199,12 +207,15 @@ class TradeView(discord.ui.View):
                     pass
 
         except Exception as e:
-            print(f"❌ Error during cancel: {e}")
+            print(f"❌ Error while cancelling listing: {e}")
 
-        # Clean up stored data
+        # Clean up temp storage
         bot.temp_sales.pop(sale["user"].id, None)
 
-        await interaction.response.send_message("✅ Listing has been canceled and deleted.", ephemeral=True)
+        try:
+            await interaction.followup.send("✅ Listing has been canceled and deleted.", ephemeral=True)
+        except Exception as e:
+            print(f"❌ Failed to send confirmation: {e}")
 
 
 class TradeCompleteView(discord.ui.View):
