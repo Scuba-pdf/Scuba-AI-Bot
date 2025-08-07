@@ -562,8 +562,14 @@ async def on_message(message: discord.Message):
         sale["extra_message_ids"] = []
 
         if len(message.attachments) > 1:
-            for attachment in message.attachments[1:3]:  # Max 2 extra
-                img_msg = await view_channel.send(attachment.url)
+            for i, attachment in enumerate(message.attachments[1:3], start=2):
+                embed = discord.Embed(
+                    title=f"📷 Additional Screenshot #{i}",
+                    description="Provided by seller",
+                    color=discord.Color.gold()
+                )
+                embed.set_image(url=attachment.url)
+                img_msg = await view_channel.send(embed=embed)
                 sale["extra_message_ids"].append(img_msg.id)
 
         await message.reply("✅ Your listing has been posted!")
