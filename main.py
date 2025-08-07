@@ -177,15 +177,33 @@ class TradeView(discord.ui.View):
             await interaction.response.send_message("❌ Only the seller can cancel this listing.", ephemeral=True)
             return
 
-        channel = interaction.channel
         try:
-            main_msg = await channel.fetch_message(sale["listing_message_id"])
-            await main_msg.delete()
-        except discord.NotFound:
-            pass
+            guild = interaction.guild
+            listing_channel = guild.get_channel(sale.get("listing_channel_id"))
+            listing_message_id = sale.get("listing_message_id")
 
+            # Delete main listing message
+            if listing_channel and listing_message_id:
+                try:
+                    msg = await listing_channel.fetch_message(listing_message_id)
+                    await msg.delete()
+                except discord.NotFound:
+                    pass
 
+            # Delete any extra image messages
+            for extra_id in sale.get("extra_message_ids", []):
+                try:
+                    msg = await listing_channel.fetch_message(extra_id)
+                    await msg.delete()
+                except discord.NotFound:
+                    pass
+
+        except Exception as e:
+            print(f"❌ Error during cancel: {e}")
+
+        # Clean up stored data
         bot.temp_sales.pop(sale["user"].id, None)
+
         await interaction.response.send_message("✅ Listing has been canceled and deleted.", ephemeral=True)
 
 
