@@ -63,7 +63,9 @@ def build_listing_embed(sale, message):
 
     # Prefer attachments from sale["attachments"], fallback to message.attachments
     attachments = sale.get("attachments") or (message.attachments if message else [])
-    if attachments:
+    if "image_url" in sale:
+        embed.set_image(url=sale["image_url"])
+    elif attachments:
         embed.set_image(url=attachments[0].url)
 
     return embed
@@ -544,6 +546,9 @@ async def on_message(message: discord.Message):
 
         # Build the listing embed (with image if available)
         embed = build_listing_embed(sale, message)
+        # Store image URL
+        if message.attachments:
+            sale["image_url"] = message.attachments[0].url
         embed_message = await view_channel.send(embed=embed, view=view)
 
         # Set message reference for later use
