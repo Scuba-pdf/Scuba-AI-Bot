@@ -12,10 +12,10 @@ import google.generativeai as genai
 
 try:
     import google.generativeai as genai
-    GEMINI_INSTALLED = True
+    GEMINI_AVAILABLE = True
 except ImportError:
-    GEMINI_INSTALLED = False
-    print("⚠️ Warning: google-generativeai module not found. Install with: pip install google-generativeai")
+    GEMINI_AVAILABLE = False
+    print("⚠️ Warning: google-generativeai module not found. AI features disabled.")
 
 from typing import Dict, Optional
 
@@ -1108,24 +1108,18 @@ async def on_message(message: discord.Message):
             )
         return
 
-    await bot.process_commands(message)
-
-
-@bot.event
-async def on_message(message):
-    if message.author.bot:
-        return
-
-    # Handle DM messages for listing images (keep your existing code)
-    if isinstance(message.channel, discord.DMChannel) and message.attachments:
-        # ... your existing DM handling code stays the same ...
-        pass
-
-    # Handle AI chat with Gemini
+        # Handle AI chat with Gemini
     if message.channel.id == AI_CHANNEL_ID:
-        if not GEMINI_AVAILABLE:
-            await message.reply(
-                "⚠️ Sorry, AI chat feature is currently unavailable. Please contact an administrator to set up the Gemini API key.")
+        if not AI_READY:
+            status_msg = "AI chat is currently unavailable."
+            if not GEMINI_AVAILABLE:
+                status_msg += " The google-generativeai library is not installed."
+            elif not GEMINI_API_KEY:
+                status_msg += " The GEMINI_API_KEY is not configured."
+            else:
+                status_msg += " There was an error initializing the AI service."
+
+            await message.reply(f"⚠️ {status_msg}")
             return
 
         async with message.channel.typing():
@@ -1133,6 +1127,7 @@ async def on_message(message):
                 # Get or create chat session for user (maintains conversation context)
                 if message.author.id not in user_chat_sessions:
                     user_chat_sessions[message.author.id] = gemini_model.start_chat(history=[])
+                    logger.info(f"Created new chat session for {message.author}")
 
                 chat_session = user_chat_sessions[message.author.id]
 
@@ -1140,7 +1135,7 @@ async def on_message(message):
                 prompt = message.content[:2000] if len(message.content) > 2000 else message.content
 
                 # Send the prompt to Gemini
-                response = chat_session.send_message(prompt)
+                response = await asyncio.to_thread(chat_session.send_message, prompt)
                 ai_reply = response.text
 
                 # Validate response
@@ -1155,21 +1150,23 @@ async def on_message(message):
                 logger.info(f"Successfully sent Gemini response to {message.author}")
 
             except Exception as e:
-                logger.error(f"Gemini API error for {message.author.id}: {e}")
+                logger.error(f"Gemini API error for {message.author.id}: {type(e).__name__}: {e}")
 
                 # Handle specific error types
-                if "quota" in str(e).lower() or "limit" in str(e).lower():
+                error_msg = str(e).lower()
+                if "quota" in error_msg or "limit" in error_msg:
                     await message.reply("⚠️ AI service quota exceeded. Please try again later.")
-                elif "safety" in str(e).lower():
+                elif "safety" in error_msg or "blocked" in error_msg:
                     await message.reply("⚠️ Your message was blocked by safety filters. Please try rephrasing.")
-                elif "invalid" in str(e).lower():
-                    await message.reply("⚠️ Invalid request. Please try a different message.")
+                elif "invalid" in error_msg or "api" in error_msg:
+                    await message.reply("⚠️ API error occurred. Please try again later.")
                 else:
-                    await message.reply("⚠️ AI service temporarily unavailable. Please try again later.")
+                    await message.reply(f"⚠️ AI error: {str(e)[:100]}...")
 
                 # Clear the problematic chat session
                 if message.author.id in user_chat_sessions:
                     del user_chat_sessions[message.author.id]
+                    logger.info(f"Cleared chat session for {message.author} due to error")
 
     await bot.process_commands(message)
 
@@ -1277,20 +1274,19 @@ if __name__ == "__main__":
         print(f"❌ Failed to start bot: {e}")
 
 
-if GEMINI_INSTALLED and GEMINI_API_KEY:
+if GEMINI_AVAILABLE and GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        GEMINI_AVAILABLE = True
-        # Create the model instance
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Free tier model
-        user_chat_sessions: Dict[int, any] = {}  # Store chat sessions per user
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        user_chat_sessions = {}  # Store chat sessions per user
+        AI_READY = True
         print("✅ Gemini AI initialized successfully")
     except Exception as e:
-        GEMINI_AVAILABLE = False
-        print(f"⚠️ Warning: Failed to initialize Gemini AI: {e}")
+        AI_READY = False
+        print(f"⚠️ Failed to initialize Gemini: {e}")
 else:
-    GEMINI_AVAILABLE = False
-    if not GEMINI_INSTALLED:
-        print("⚠️ Warning: google-generativeai not installed. Gemini AI features disabled.")
-    elif not GEMINI_API_KEY:
-        print("⚠️ Warning: GEMINI_API_KEY not found. Gemini AI features disabled.")
+    AI_READY = False
+    if not GEMINI_AVAILABLE:
+        print("⚠️ Gemini library not installed")
+    if not GEMINI_API_KEY:
+        print("⚠️ GEMINI_API_KEY not found in environment")
