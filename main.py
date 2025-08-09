@@ -9,14 +9,6 @@ import logging
 import json
 from datetime import datetime, timedelta
 import google.generativeai as genai
-
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-    print("⚠️ Warning: google-generativeai module not found. AI features disabled.")
-
 from typing import Dict, Optional
 
 
@@ -55,6 +47,13 @@ bot.temp_sales = {}
 bot.active_listings = {}  # {listing_id: sale_data}
 bot.pending_vouches = {}
 bot.user_stats = {}  # {user_id: {"sales": 0, "purchases": 0, "rating": 0}}
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    print("⚠️ Warning: google-generativeai module not found. AI features disabled.")
 
 
 # === Utility Functions ===
