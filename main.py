@@ -1052,27 +1052,77 @@ async def on_message(message):
 
     if message.channel.id == AI_CHANNEL_ID:
         if not AI_AVAILABLE:
-            await message.reply("⚠️ Sorry, AI chat feature is currently unavailable. Please try again later.")
+            await message.reply(
+                "⚠️ Sorry, AI chat feature is currently unavailable. The HuggingChatAPI module is not installed.")
             return
 
         async with message.channel.typing():
             try:
+                # Initialize chatbot if needed
                 if message.author.id not in user_chatbots:
-                    user_chatbots[message.author.id] = SimpleHugChat()
+                    try:
+                        user_chatbots[message.author.id] = SimpleHugChat()
+                        logger.info(f"Created new chatbot instance for user {message.author.id}")
+                    except Exception as init_error:
+                        logger.error(f"Failed to initialize chatbot for {message.author.id}: {init_error}")
+                        await message.reply("⚠️ Failed to initialize AI chat session. Please try again later.")
+                        return
+
                 chatbot = user_chatbots[message.author.id]
 
-                ai_reply = chatbot.send_prompt(message.content)
+                # Add timeout and better error handling
+                try:
+                    # Limit message length to prevent issues
+                    prompt = message.content[:2000] if len(message.content) > 2000 else message.content
 
-                if not ai_reply or not isinstance(ai_reply, str) or ai_reply.strip() == "":
-                    raise ValueError("Received empty response from AI")
+                    ai_reply = chatbot.send_prompt(prompt)
 
-                await message.reply(ai_reply)
-            except ValueError as ve:
-                await message.reply(f"⚠️ AI returned an empty or invalid response: {ve}")
-            except Exception as e:
-                # For debugging, log the error somewhere or print
-                print(f"AI error: {e}")
-                await message.reply(f"⚠️ AI error occurred: {e}")
+                    # More comprehensive response validation
+                    if ai_reply is None:
+                        raise ValueError("AI returned None response")
+
+                    if not isinstance(ai_reply, str):
+                        # Try to convert to string if possible
+                        try:
+                            ai_reply = str(ai_reply)
+                        except:
+                            raise ValueError(f"AI returned non-string response of type: {type(ai_reply)}")
+
+                    if ai_reply.strip() == "":
+                        raise ValueError("AI returned empty string response")
+
+                    # Limit response length for Discord
+                    if len(ai_reply) > 2000:
+                        ai_reply = ai_reply[:1997] + "..."
+
+                    await message.reply(ai_reply)
+                    logger.info(f"Successfully sent AI response to {message.author}")
+
+                except Exception as api_error:
+                    # Log the specific error for debugging
+                    logger.error(f"HuggingChatAPI error for {message.author.id}: {api_error}")
+
+                    # Remove the problematic chatbot instance
+                    if message.author.id in user_chatbots:
+                        del user_chatbots[message.author.id]
+
+                    # Provide more specific error messages
+                    if "Expecting value" in str(api_error):
+                        await message.reply(
+                            "⚠️ The AI service returned an invalid response. This might be a temporary issue. Please try again.")
+                    elif "timeout" in str(api_error).lower():
+                        await message.reply("⚠️ The AI service timed out. Please try again with a shorter message.")
+                    elif "rate limit" in str(api_error).lower():
+                        await message.reply(
+                            "⚠️ AI service rate limit reached. Please wait a moment before trying again.")
+                    else:
+                        await message.reply(f"⚠️ AI service error: {str(api_error)[:100]}... Please try again later.")
+
+            except Exception as general_error:
+                logger.error(f"General AI chat error for {message.author.id}: {general_error}")
+                await message.reply("⚠️ An unexpected error occurred with the AI chat. Please try again later.")
+
+    await bot.process_commands(message)
 
 
 @bot.event
@@ -1082,7 +1132,10 @@ async def on_ready():
     bot.add_view(SaleView())
     bot.add_view(TradeView(bot, None))  # For persistent trade buttons
 
-    # Load any persistent data here if using file storage
+    # Start cleanup task
+    if not hasattr(bot, '_cleanup_started'):
+        bot.loop.create_task(cleanup_expired_listings())
+        bot._cleanup_started = True
 
     print(f"✅ {bot.user} is online and ready!")
     print(f"📊 Active temp sales: {len(bot.temp_sales)}")
@@ -1164,14 +1217,6 @@ async def cleanup_expired_listings():
             logger.error(f"Error in cleanup task: {e}")
 
         await asyncio.sleep(300)  # Run every 5 minutes
-
-
-# Start the cleanup task when bot is ready
-@bot.event
-async def on_ready():
-    if not hasattr(bot, '_cleanup_started'):
-        bot.loop.create_task(cleanup_expired_listings())
-        bot._cleanup_started = True
 
 
 # === Run Bot ===
