@@ -56,6 +56,25 @@ except ImportError:
     print("⚠️ Warning: google-generativeai module not found. AI features disabled.")
 
 
+if GEMINI_AVAILABLE and GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        user_chat_sessions = {}  # Store chat sessions per user
+        AI_READY = True
+        print("✅ Gemini AI initialized successfully")
+    except Exception as e:
+        AI_READY = False
+        print(f"⚠️ Failed to initialize Gemini: {e}")
+else:
+    AI_READY = False
+    if not GEMINI_AVAILABLE:
+        print("⚠️ Gemini library not installed")
+    if not GEMINI_API_KEY:
+        print("⚠️ GEMINI_API_KEY not found in environment")
+
+
+
 # === Utility Functions ===
 def extract_price_value(price_str: str) -> int:
     """Extract numeric value from price string"""
@@ -1271,21 +1290,3 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         print(f"❌ Failed to start bot: {e}")
-
-
-if GEMINI_AVAILABLE and GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
-        user_chat_sessions = {}  # Store chat sessions per user
-        AI_READY = True
-        print("✅ Gemini AI initialized successfully")
-    except Exception as e:
-        AI_READY = False
-        print(f"⚠️ Failed to initialize Gemini: {e}")
-else:
-    AI_READY = False
-    if not GEMINI_AVAILABLE:
-        print("⚠️ Gemini library not installed")
-    if not GEMINI_API_KEY:
-        print("⚠️ GEMINI_API_KEY not found in environment")
