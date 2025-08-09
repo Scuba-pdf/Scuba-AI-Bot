@@ -8,6 +8,7 @@ import uuid
 import logging
 import json
 from datetime import datetime, timedelta
+from HuggingChatAPI import SimpleHugChat
 
 load_dotenv()
 
@@ -36,12 +37,14 @@ STAFF_ROLE_ID = 1399572599054536866
 TRADE_CATEGORY_ID = 1402544026032541768
 COMPLETED_SALES_CHANNEL_ID = 1402544168034766850
 VOUCH_LOG_CHANNEL_ID = 1399553110841622660
+AI_CHANNEL_ID = 1400157457774411916
 
 # In-memory storage (consider using a database for production)
 bot.temp_sales = {}
 bot.active_listings = {}  # {listing_id: sale_data}
 bot.pending_vouches = {}
 bot.user_stats = {}  # {user_id: {"sales": 0, "purchases": 0, "rating": 0}}
+user_chatbots = {}
 
 
 # === Utility Functions ===
@@ -1034,6 +1037,25 @@ async def on_message(message: discord.Message):
         return
 
     await bot.process_commands(message)
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    if message.channel.id == AI_CHANNEL_ID:
+        async with message.channel.typing():
+            try:
+                # If user doesn't have a chatbot yet, create one
+                if message.author.id not in user_chatbots:
+                    user_chatbots[message.author.id] = SimpleHugChat()
+
+                chatbot = user_chatbots[message.author.id]
+                ai_reply = chatbot.send_prompt(message.content)
+
+                await message.reply(ai_reply)
+            except Exception as e:
+                await message.reply(f"⚠️ Error: {e}")
 
 
 @bot.event
