@@ -9,6 +9,14 @@ import logging
 import json
 from datetime import datetime, timedelta
 import google.generativeai as genai
+
+try:
+    import google.generativeai as genai
+    GEMINI_INSTALLED = True
+except ImportError:
+    GEMINI_INSTALLED = False
+    print("⚠️ Warning: google-generativeai module not found. Install with: pip install google-generativeai")
+
 from typing import Dict, Optional
 
 
@@ -1269,12 +1277,20 @@ if __name__ == "__main__":
         print(f"❌ Failed to start bot: {e}")
 
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    GEMINI_AVAILABLE = True
-    # Create the model instance
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Free tier model
-    user_chat_sessions: Dict[int, any] = {}  # Store chat sessions per user
+if GEMINI_INSTALLED and GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_AVAILABLE = True
+        # Create the model instance
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Free tier model
+        user_chat_sessions: Dict[int, any] = {}  # Store chat sessions per user
+        print("✅ Gemini AI initialized successfully")
+    except Exception as e:
+        GEMINI_AVAILABLE = False
+        print(f"⚠️ Warning: Failed to initialize Gemini AI: {e}")
 else:
     GEMINI_AVAILABLE = False
-    print("⚠️ Warning: GEMINI_API_KEY not found. Gemini AI features disabled.")
+    if not GEMINI_INSTALLED:
+        print("⚠️ Warning: google-generativeai not installed. Gemini AI features disabled.")
+    elif not GEMINI_API_KEY:
+        print("⚠️ Warning: GEMINI_API_KEY not found. Gemini AI features disabled.")
