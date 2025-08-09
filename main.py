@@ -8,12 +8,8 @@ import uuid
 import logging
 import json
 from datetime import datetime, timedelta
-try:
-    from HuggingChatAPI import SimpleHugChat
-    AI_AVAILABLE = True
-except ModuleNotFoundError:
-    AI_AVAILABLE = False
-    print("⚠️ Warning: HuggingChatAPI module not found. AI features disabled.")
+import google.generativeai as genai
+from typing import Dict, Optional
 
 
 load_dotenv()
@@ -26,6 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 intents = discord.Intents.default()
 intents.messages = True
@@ -50,8 +47,6 @@ bot.temp_sales = {}
 bot.active_listings = {}  # {listing_id: sale_data}
 bot.pending_vouches = {}
 bot.user_stats = {}  # {user_id: {"sales": 0, "purchases": 0, "rating": 0}}
-if AI_AVAILABLE:
-    user_chatbots = {}
 
 
 # === Utility Functions ===
@@ -797,6 +792,68 @@ class VouchCommentModal(discord.ui.Modal, title="Leave Your Review"):
 
 
 # === Bot Commands ===
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def test_gemini(ctx):
+    """Test Gemini AI functionality"""
+    if not GEMINI_AVAILABLE:
+        await ctx.send("❌ Gemini API is not configured. Please set the GEMINI_API_KEY environment variable.")
+        return
+
+    embed = discord.Embed(title="🔧 Gemini AI Test", color=discord.Color.blue())
+
+    try:
+        # Test simple prompt
+        test_model = genai.GenerativeModel('gemini-1.5-flash')
+        test_response = test_model.generate_content(
+            "Hello! This is a test message. Please respond with 'Test successful!'")
+
+        if test_response and test_response.text:
+            embed.add_field(
+                name="✅ Gemini Test Successful",
+                value=f"Response: {test_response.text[:200]}{'...' if len(test_response.text) > 200 else ''}",
+                inline=False
+            )
+            embed.color = discord.Color.green()
+        else:
+            embed.add_field(name="❌ Test Failed", value="No response received", inline=False)
+            embed.color = discord.Color.red()
+
+    except Exception as e:
+        embed.add_field(name="❌ Error", value=f"{type(e).__name__}: {str(e)}", inline=False)
+        embed.color = discord.Color.red()
+
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def clear_gemini_sessions(ctx):
+    """Clear all Gemini chat sessions"""
+    if GEMINI_AVAILABLE:
+        count = len(user_chat_sessions)
+        user_chat_sessions.clear()
+        await ctx.send(f"✅ Cleared {count} Gemini chat sessions.")
+    else:
+        await ctx.send("❌ Gemini AI is not available.")
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def gemini_stats(ctx):
+    """Show Gemini usage statistics"""
+    if not GEMINI_AVAILABLE:
+        await ctx.send("❌ Gemini AI is not configured.")
+        return
+
+    embed = discord.Embed(title="📊 Gemini AI Statistics", color=discord.Color.blue())
+    embed.add_field(name="Active Chat Sessions", value=str(len(user_chat_sessions)), inline=True)
+    embed.add_field(name="Model", value="gemini-1.5-flash", inline=True)
+    embed.add_field(name="Status", value="✅ Online" if GEMINI_AVAILABLE else "❌ Offline", inline=True)
+
+    await ctx.send(embed=embed)
+
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def panel(ctx):
@@ -1045,82 +1102,66 @@ async def on_message(message: discord.Message):
 
     await bot.process_commands(message)
 
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
+    # Handle DM messages for listing images (keep your existing code)
+    if isinstance(message.channel, discord.DMChannel) and message.attachments:
+        # ... your existing DM handling code stays the same ...
+        pass
+
+    # Handle AI chat with Gemini
     if message.channel.id == AI_CHANNEL_ID:
-        if not AI_AVAILABLE:
+        if not GEMINI_AVAILABLE:
             await message.reply(
-                "⚠️ Sorry, AI chat feature is currently unavailable. The HuggingChatAPI module is not installed.")
+                "⚠️ Sorry, AI chat feature is currently unavailable. Please contact an administrator to set up the Gemini API key.")
             return
 
         async with message.channel.typing():
             try:
-                # Initialize chatbot if needed
-                if message.author.id not in user_chatbots:
-                    try:
-                        user_chatbots[message.author.id] = SimpleHugChat()
-                        logger.info(f"Created new chatbot instance for user {message.author.id}")
-                    except Exception as init_error:
-                        logger.error(f"Failed to initialize chatbot for {message.author.id}: {init_error}")
-                        await message.reply("⚠️ Failed to initialize AI chat session. Please try again later.")
-                        return
+                # Get or create chat session for user (maintains conversation context)
+                if message.author.id not in user_chat_sessions:
+                    user_chat_sessions[message.author.id] = gemini_model.start_chat(history=[])
 
-                chatbot = user_chatbots[message.author.id]
+                chat_session = user_chat_sessions[message.author.id]
 
-                # Add timeout and better error handling
-                try:
-                    # Limit message length to prevent issues
-                    prompt = message.content[:2000] if len(message.content) > 2000 else message.content
+                # Limit message length
+                prompt = message.content[:2000] if len(message.content) > 2000 else message.content
 
-                    ai_reply = chatbot.send_prompt(prompt)
+                # Send the prompt to Gemini
+                response = chat_session.send_message(prompt)
+                ai_reply = response.text
 
-                    # More comprehensive response validation
-                    if ai_reply is None:
-                        raise ValueError("AI returned None response")
+                # Validate response
+                if not ai_reply or ai_reply.strip() == "":
+                    raise ValueError("Empty response from Gemini")
 
-                    if not isinstance(ai_reply, str):
-                        # Try to convert to string if possible
-                        try:
-                            ai_reply = str(ai_reply)
-                        except:
-                            raise ValueError(f"AI returned non-string response of type: {type(ai_reply)}")
+                # Limit response length for Discord
+                if len(ai_reply) > 2000:
+                    ai_reply = ai_reply[:1997] + "..."
 
-                    if ai_reply.strip() == "":
-                        raise ValueError("AI returned empty string response")
+                await message.reply(ai_reply)
+                logger.info(f"Successfully sent Gemini response to {message.author}")
 
-                    # Limit response length for Discord
-                    if len(ai_reply) > 2000:
-                        ai_reply = ai_reply[:1997] + "..."
+            except Exception as e:
+                logger.error(f"Gemini API error for {message.author.id}: {e}")
 
-                    await message.reply(ai_reply)
-                    logger.info(f"Successfully sent AI response to {message.author}")
+                # Handle specific error types
+                if "quota" in str(e).lower() or "limit" in str(e).lower():
+                    await message.reply("⚠️ AI service quota exceeded. Please try again later.")
+                elif "safety" in str(e).lower():
+                    await message.reply("⚠️ Your message was blocked by safety filters. Please try rephrasing.")
+                elif "invalid" in str(e).lower():
+                    await message.reply("⚠️ Invalid request. Please try a different message.")
+                else:
+                    await message.reply("⚠️ AI service temporarily unavailable. Please try again later.")
 
-                except Exception as api_error:
-                    # Log the specific error for debugging
-                    logger.error(f"HuggingChatAPI error for {message.author.id}: {api_error}")
-
-                    # Remove the problematic chatbot instance
-                    if message.author.id in user_chatbots:
-                        del user_chatbots[message.author.id]
-
-                    # Provide more specific error messages
-                    if "Expecting value" in str(api_error):
-                        await message.reply(
-                            "⚠️ The AI service returned an invalid response. This might be a temporary issue. Please try again.")
-                    elif "timeout" in str(api_error).lower():
-                        await message.reply("⚠️ The AI service timed out. Please try again with a shorter message.")
-                    elif "rate limit" in str(api_error).lower():
-                        await message.reply(
-                            "⚠️ AI service rate limit reached. Please wait a moment before trying again.")
-                    else:
-                        await message.reply(f"⚠️ AI service error: {str(api_error)[:100]}... Please try again later.")
-
-            except Exception as general_error:
-                logger.error(f"General AI chat error for {message.author.id}: {general_error}")
-                await message.reply("⚠️ An unexpected error occurred with the AI chat. Please try again later.")
+                # Clear the problematic chat session
+                if message.author.id in user_chat_sessions:
+                    del user_chat_sessions[message.author.id]
 
     await bot.process_commands(message)
 
@@ -1226,3 +1267,14 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
         print(f"❌ Failed to start bot: {e}")
+
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    GEMINI_AVAILABLE = True
+    # Create the model instance
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Free tier model
+    user_chat_sessions: Dict[int, any] = {}  # Store chat sessions per user
+else:
+    GEMINI_AVAILABLE = False
+    print("⚠️ Warning: GEMINI_API_KEY not found. Gemini AI features disabled.")
