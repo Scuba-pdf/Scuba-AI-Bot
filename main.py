@@ -1063,16 +1063,15 @@ async def on_message(message):
 
                 ai_reply = chatbot.send_prompt(message.content)
 
-                # Defensive check: make sure ai_reply is not empty or invalid
                 if not ai_reply or not isinstance(ai_reply, str) or ai_reply.strip() == "":
                     raise ValueError("Received empty response from AI")
 
                 await message.reply(ai_reply)
-            except json.JSONDecodeError:
-                await message.reply("⚠️ AI response was invalid JSON. Please try again.")
             except ValueError as ve:
                 await message.reply(f"⚠️ AI returned an empty or invalid response: {ve}")
             except Exception as e:
+                # For debugging, log the error somewhere or print
+                print(f"AI error: {e}")
                 await message.reply(f"⚠️ AI error occurred: {e}")
 
 
