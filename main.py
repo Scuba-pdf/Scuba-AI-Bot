@@ -8,7 +8,13 @@ import uuid
 import logging
 import json
 from datetime import datetime, timedelta
-from HuggingChatAPI import SimpleHugChat
+try:
+    from HuggingChatAPI import SimpleHugChat
+    AI_AVAILABLE = True
+except ModuleNotFoundError:
+    AI_AVAILABLE = False
+    print("⚠️ Warning: HuggingChatAPI module not found. AI features disabled.")
+
 
 load_dotenv()
 
@@ -44,7 +50,8 @@ bot.temp_sales = {}
 bot.active_listings = {}  # {listing_id: sale_data}
 bot.pending_vouches = {}
 bot.user_stats = {}  # {user_id: {"sales": 0, "purchases": 0, "rating": 0}}
-user_chatbots = {}
+if AI_AVAILABLE:
+    user_chatbots = {}
 
 
 # === Utility Functions ===
@@ -1044,18 +1051,20 @@ async def on_message(message):
         return
 
     if message.channel.id == AI_CHANNEL_ID:
+        if not AI_AVAILABLE:
+            await message.reply("⚠️ Sorry, AI chat feature is currently unavailable. Please try again later.")
+            return
+
         async with message.channel.typing():
             try:
-                # If user doesn't have a chatbot yet, create one
                 if message.author.id not in user_chatbots:
                     user_chatbots[message.author.id] = SimpleHugChat()
-
                 chatbot = user_chatbots[message.author.id]
-                ai_reply = chatbot.send_prompt(message.content)
 
+                ai_reply = chatbot.send_prompt(message.content)
                 await message.reply(ai_reply)
             except Exception as e:
-                await message.reply(f"⚠️ Error: {e}")
+                await message.reply(f"⚠️ AI error occurred: {e}")
 
 
 @bot.event
