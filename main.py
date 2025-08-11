@@ -960,6 +960,235 @@ async def stats(ctx, user: discord.Member = None):
 
 @bot.command()
 @commands.has_permissions(administrator=True)
+async def clear_vouches(ctx, user: discord.Member, confirmation: str = None):
+    """Clear all vouch history for a user (admin only)"""
+    if confirmation != "CONFIRM":
+        embed = discord.Embed(
+            title="⚠️ Vouch History Clearing",
+            description=(
+                f"This will **permanently delete** all vouch history for {user.mention}:\n\n"
+                f"• All ratings and reviews\n"
+                f"• Average rating calculation\n"
+                f"• Rating count\n\n"
+                f"**This action cannot be undone!**\n\n"
+                f"To confirm, use: `!clear_vouches {user.mention} CONFIRM`"
+            ),
+            color=discord.Color.orange()
+        )
+        embed.set_footer(text="⚠️ This is a destructive action - use with caution")
+        await ctx.send(embed=embed)
+        return
+
+    # Get current stats before clearing
+    old_stats = get_user_stats(user.id)
+    old_rating = get_average_rating(user.id)
+
+    # Clear the user's rating data while preserving sales/purchases
+    if user.id in bot.user_stats:
+        bot.user_stats[user.id]["total_rating"] = 0
+        bot.user_stats[user.id]["rating_count"] = 0
+
+    # Remove any pending vouches for this user
+    vouches_removed = 0
+    for trade_id in list(bot.pending_vouches.keys()):
+        trade_vouches = bot.pending_vouches[trade_id]
+
+        # Remove vouches where this user was rated
+        for role in list(trade_vouches.keys()):
+            if role in trade_vouches:
+                vouch_data = trade_vouches[role]
+                # Check if this vouch was about the target user
+                # (This is a bit tricky since we don't store who was rated)
+                # You might want to enhance this logic based on your needs
+                pass
+
+        # Remove vouches submitted by this user
+        roles_to_remove = []
+        for role, vouch_data in trade_vouches.items():
+            if vouch_data.get("rater") and vouch_data["rater"].id == user.id:
+                roles_to_remove.append(role)
+                vouches_removed += 1
+
+        for role in roles_to_remove:
+            del trade_vouches[role]
+
+        # Remove empty trade vouch entries
+        if not trade_vouches:
+            del bot.pending_vouches[trade_id]
+
+    # Success message
+    embed = discord.Embed(
+        title="✅ Vouch History Cleared",
+        description=f"Successfully cleared vouch history for {user.mention}",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(
+        name="📊 Previous Stats",
+        value=(
+            f"Rating: {old_rating}/5 ⭐\n"
+            f"Reviews: {old_stats['rating_count']}\n"
+            f"Sales: {old_stats['sales']} (preserved)\n"
+            f"Purchases: {old_stats['purchases']} (preserved)"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="🗑️ Removed",
+        value=(
+            f"Pending vouches: {vouches_removed}\n"
+            f"Rating data: ✅ Cleared\n"
+            f"Review count: ✅ Reset to 0"
+        ),
+        inline=True
+    )
+
+    embed.set_footer(text=f"Action performed by {ctx.author}")
+
+    await ctx.send(embed=embed)
+    logger.info(f"Vouch history cleared for {user} by {ctx.author}")
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def reset_user_stats(ctx, user: discord.Member, confirmation: str = None):
+    """Completely reset all stats for a user (admin only)"""
+    if confirmation != "CONFIRM":
+        embed = discord.Embed(
+            title="⚠️ Complete User Reset",
+            description=(
+                f"This will **permanently delete** ALL data for {user.mention}:\n\n"
+                f"• All sales and purchases\n"
+                f"• All ratings and reviews\n"
+                f"• All trading statistics\n\n"
+                f"**This action cannot be undone!**\n\n"
+                f"To confirm, use: `!reset_user_stats {user.mention} CONFIRM`"
+            ),
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="⚠️ This completely removes the user from the system")
+        await ctx.send(embed=embed)
+        return
+
+    # Get current stats before clearing
+    old_stats = get_user_stats(user.id)
+    old_rating = get_average_rating(user.id)
+
+    # Completely remove user from stats
+    if user.id in bot.user_stats:
+        del bot.user_stats[user.id]
+
+    # Remove pending vouches
+    vouches_removed = 0
+    for trade_id in list(bot.pending_vouches.keys()):
+        trade_vouches = bot.pending_vouches[trade_id]
+        roles_to_remove = []
+
+        for role, vouch_data in trade_vouches.items():
+            if vouch_data.get("rater") and vouch_data["rater"].id == user.id:
+                roles_to_remove.append(role)
+                vouches_removed += 1
+
+        for role in roles_to_remove:
+            del trade_vouches[role]
+
+        if not trade_vouches:
+            del bot.pending_vouches[trade_id]
+
+    # Remove any active listings
+    user_listings = [listing_id for listing_id, sale in bot.active_listings.items()
+                     if sale["user"].id == user.id]
+    for listing_id in user_listings:
+        del bot.active_listings[listing_id]
+
+    # Remove temporary sales
+    bot.temp_sales.pop(user.id, None)
+
+    embed = discord.Embed(
+        title="✅ User Data Completely Reset",
+        description=f"All data for {user.mention} has been permanently removed",
+        color=discord.Color.red()
+    )
+
+    embed.add_field(
+        name="📊 Previous Stats",
+        value=(
+            f"Sales: {old_stats['sales']}\n"
+            f"Purchases: {old_stats['purchases']}\n"
+            f"Rating: {old_rating}/5 ⭐\n"
+            f"Reviews: {old_stats['rating_count']}"
+        ),
+        inline=True
+    )
+
+    embed.add_field(
+        name="🗑️ Removed",
+        value=(
+            f"User statistics: ✅\n"
+            f"Pending vouches: {vouches_removed}\n"
+            f"Active listings: {len(user_listings)}\n"
+            f"Temp sales: {'✅' if user.id in bot.temp_sales else 'None'}"
+        ),
+        inline=True
+    )
+
+    await ctx.send(embed=embed)
+    logger.info(f"Complete user reset for {user} by {ctx.author}")
+
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def vouch_info(ctx, user: discord.Member):
+    """Display detailed vouch information for a user"""
+    stats = get_user_stats(user.id)
+    rating = get_average_rating(user.id)
+
+    embed = discord.Embed(
+        title=f"📝 Vouch Information",
+        color=discord.Color.blue()
+    )
+    embed.set_author(name=user.display_name, icon_url=user.display_avatar.url)
+
+    embed.add_field(
+        name="📊 Rating Statistics",
+        value=(
+            f"Average Rating: {rating}/5 {'⭐' * int(rating) if rating > 0 else 'No ratings'}\n"
+            f"Total Reviews: {stats['rating_count']}\n"
+            f"Total Rating Points: {stats['total_rating']}"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🔄 Trading Activity",
+        value=(
+            f"Sales: {stats['sales']}\n"
+            f"Purchases: {stats['purchases']}\n"
+            f"Total Trades: {stats['sales'] + stats['purchases']}"
+        ),
+        inline=False
+    )
+
+    # Check for pending vouches
+    pending_count = 0
+    for trade_vouches in bot.pending_vouches.values():
+        for vouch_data in trade_vouches.values():
+            if vouch_data.get("rater") and vouch_data["rater"].id == user.id:
+                pending_count += 1
+
+    if pending_count > 0:
+        embed.add_field(
+            name="⏳ Pending Vouches",
+            value=f"{pending_count} vouch(es) waiting to be completed",
+            inline=False
+        )
+
+    await ctx.send(embed=embed)
+
+
+@bot.command()
+@commands.has_permissions(administrator=True)
 async def active_listings(ctx):
     """View all active listings"""
     temp_count = len(bot.temp_sales)
