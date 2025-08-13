@@ -1,6 +1,7 @@
 import os
 import discord
 from discord.ext import commands
+from discord import app_commands
 from dotenv import load_dotenv
 import re
 import asyncio
@@ -10,7 +11,6 @@ import json
 from datetime import datetime, timedelta
 import google.generativeai as genai
 from typing import Dict, Optional
-
 
 load_dotenv()
 
@@ -34,6 +34,7 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # === Configuration - Replace with your actual IDs ===
+# Trading System Configuration
 OSRS_MAIN_CHANNEL_ID = 1393681123355394058
 OSRS_IRON_CHANNEL_ID = 1393671722636546088
 STAFF_ROLE_ID = 1399572599054536866
@@ -41,6 +42,11 @@ TRADE_CATEGORY_ID = 1402544026032541768
 COMPLETED_SALES_CHANNEL_ID = 1402544168034766850
 VOUCH_LOG_CHANNEL_ID = 1399553110841622660
 AI_CHANNEL_ID = 1400157457774411916
+
+# Ticket System Configuration
+TICKET_CATEGORY_NAME = "Support Tickets"
+SUPPORT_ROLE_NAME = "Support"
+TICKET_COUNTER = 0
 
 # In-memory storage (consider using a database for production)
 bot.temp_sales = {}
@@ -50,11 +56,11 @@ bot.user_stats = {}  # {user_id: {"sales": 0, "purchases": 0, "rating": 0}}
 
 try:
     import google.generativeai as genai
+
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
     print("⚠️ Warning: google-generativeai module not found. AI features disabled.")
-
 
 if GEMINI_AVAILABLE and GEMINI_API_KEY:
     try:
@@ -74,8 +80,7 @@ else:
         print("⚠️ GEMINI_API_KEY not found in environment")
 
 
-
-# === Utility Functions ===
+# === Utility Functions (Trading) ===
 def extract_price_value(price_str: str) -> int:
     """Extract numeric value from price string"""
     if not price_str:
@@ -122,7 +127,7 @@ def get_average_rating(user_id: int) -> float:
     return round(stats["total_rating"] / stats["rating_count"], 1)
 
 
-# === UI Components ===
+# === UI Components (Trading) ===
 def build_listing_embed(sale, message=None):
     """Build the listing embed with improved formatting"""
     embed = discord.Embed(
@@ -159,6 +164,7 @@ def build_listing_embed(sale, message=None):
     return embed
 
 
+# === Trading Views ===
 class SaleView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -438,7 +444,7 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
 
         # Pre-fill with current values
         current_type = sale_data["account_type"].split(" - ", 1)[-1] if " - " in sale_data["account_type"] else \
-        sale_data["account_type"]
+            sale_data["account_type"]
 
         self.account_type = discord.ui.TextInput(
             label="Account Type",
@@ -817,8 +823,145 @@ class VouchCommentModal(discord.ui.Modal, title="Leave Your Review"):
             logger.error(f"Error posting complete vouch: {e}")
 
 
-# === Bot Commands ===
+# === TICKET SYSTEM VIEWS ===
+class TicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)  # Persistent view
 
+    @discord.ui.button(label='Create Ticket', style=discord.ButtonStyle.green, emoji='🎫', custom_id="create_ticket_btn")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        global TICKET_COUNTER
+        TICKET_COUNTER += 1
+
+        guild = interaction.guild
+        user = interaction.user
+
+        # Find or create the ticket category
+        category = discord.utils.get(guild.categories, name=TICKET_CATEGORY_NAME)
+        if not category:
+            category = await guild.create_category(TICKET_CATEGORY_NAME)
+
+        # Create ticket channel
+        channel_name = f"ticket-{user.name}-{TICKET_COUNTER}"
+
+        # Set permissions
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+
+        # Add support role permissions if it exists
+        support_role = discord.utils.get(guild.roles, name=SUPPORT_ROLE_NAME)
+        if support_role:
+            overwrites[support_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+        # Also add staff role permissions if it exists (for trading staff)
+        staff_role = guild.get_role(STAFF_ROLE_ID)
+        if staff_role:
+            overwrites[staff_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+        ticket_channel = await guild.create_text_channel(
+            channel_name,
+            category=category,
+            overwrites=overwrites
+        )
+
+        # Create welcome embed for the ticket
+        embed = discord.Embed(
+            title="🎫 Support Ticket",
+            description="Support will be with you shortly. To close this ticket, press the close button below.",
+            color=discord.Color.blue()
+        )
+        embed.add_field(
+            name="📋 What can we help you with?",
+            value=(
+                "• Trading issues or disputes\n"
+                "• Account verification\n"
+                "• Technical support\n"
+                "• General questions\n"
+                "• Report a problem"
+            ),
+            inline=False
+        )
+        embed.set_footer(text="ScubaAI Support System - We're here to help!")
+
+        # Send welcome message with close button
+        await ticket_channel.send(
+            f"Welcome {user.mention}!",
+            embed=embed,
+            view=CloseTicketView()
+        )
+
+        # Respond to the interaction
+        await interaction.response.send_message(
+            f"✅ **Ticket created successfully!**\nCheck {ticket_channel.mention} for support.",
+            ephemeral=True
+        )
+
+        logger.info(f"Ticket created: {ticket_channel.name} by {user}")
+
+
+class CloseTicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label='Close Ticket', style=discord.ButtonStyle.red, emoji='🔒', custom_id="close_ticket_btn")
+    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Check if user has permission to close (ticket creator, support, or staff)
+        channel = interaction.channel
+        if not channel.name.startswith("ticket-"):
+            await interaction.response.send_message("❌ This can only be used in ticket channels!", ephemeral=True)
+            return
+
+        # Create confirmation embed
+        embed = discord.Embed(
+            title="🔒 Close Ticket",
+            description="Are you sure you want to close this support ticket?",
+            color=discord.Color.red()
+        )
+        embed.add_field(
+            name="⚠️ Note",
+            value="This action cannot be undone. The channel will be permanently deleted.",
+            inline=False
+        )
+
+        await interaction.response.send_message(
+            embed=embed,
+            view=ConfirmCloseView(),
+            ephemeral=True
+        )
+
+
+class ConfirmCloseView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label='Yes, Close Ticket', style=discord.ButtonStyle.red, emoji='✅')
+    async def confirm_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = interaction.channel
+
+        # Send closing message
+        embed = discord.Embed(
+            title="🔒 Ticket Closing",
+            description=f"This ticket is being closed by {interaction.user.mention}.\nChannel will be deleted in 5 seconds...",
+            color=discord.Color.red()
+        )
+        embed.set_footer(text="Thank you for using our support system!")
+
+        await interaction.response.send_message(embed=embed)
+        logger.info(f"Ticket closed: {channel.name} by {interaction.user}")
+
+        # Wait 5 seconds then delete
+        await asyncio.sleep(5)
+        await channel.delete(reason=f"Ticket closed by {interaction.user}")
+
+    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.gray, emoji='❌')
+    async def cancel_close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("✅ Ticket close cancelled.", ephemeral=True)
+
+
+# === Bot Commands (Trading) ===
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def test_gemini(ctx):
@@ -879,6 +1022,7 @@ async def gemini_stats(ctx):
     embed.add_field(name="Status", value="✅ Online" if GEMINI_AVAILABLE else "❌ Offline", inline=True)
 
     await ctx.send(embed=embed)
+
 
 @bot.command()
 @commands.has_permissions(administrator=True)
@@ -992,15 +1136,6 @@ async def clear_vouches(ctx, user: discord.Member, confirmation: str = None):
     vouches_removed = 0
     for trade_id in list(bot.pending_vouches.keys()):
         trade_vouches = bot.pending_vouches[trade_id]
-
-        # Remove vouches where this user was rated
-        for role in list(trade_vouches.keys()):
-            if role in trade_vouches:
-                vouch_data = trade_vouches[role]
-                # Check if this vouch was about the target user
-                # (This is a bit tricky since we don't store who was rated)
-                # You might want to enhance this logic based on your needs
-                pass
 
         # Remove vouches submitted by this user
         roles_to_remove = []
@@ -1238,14 +1373,219 @@ async def force_complete(ctx, channel_id: int):
         await ctx.send(f"❌ Error: {e}")
 
 
+# === TICKET SYSTEM COMMANDS ===
+@bot.tree.command(name="ticket_panel", description="Create the support ticket panel")
+@app_commands.default_permissions(administrator=True)
+async def ticket_panel_slash(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🎫 Support Ticket System",
+        description=(
+            "Need help with trading, account issues, or have questions?\n"
+            "Create a private support ticket using the button below!\n\n"
+            "**Our support team can help with:**\n"
+            "• Trading disputes or issues\n"
+            "• Account verification problems\n"
+            "• Technical support\n"
+            "• General questions about the marketplace\n"
+            "• Reporting problems or violations"
+        ),
+        color=discord.Color.blue()
+    )
+    embed.add_field(
+        name="📋 How it works:",
+        value=(
+            "1. Click **Create Ticket** below\n"
+            "2. A private channel will be created for you\n"
+            "3. Explain your issue to our support team\n"
+            "4. We'll help resolve your problem!"
+        ),
+        inline=False
+    )
+    embed.set_footer(text="ScubaAI Support - We're here to help 24/7!")
+
+    await interaction.response.send_message(embed=embed, view=TicketView())
+
+
+@bot.tree.command(name="ticket_stats", description="View support ticket statistics")
+@app_commands.default_permissions(administrator=True)
+async def ticket_stats_slash(interaction: discord.Interaction):
+    guild = interaction.guild
+    category = discord.utils.get(guild.categories, name=TICKET_CATEGORY_NAME)
+
+    if not category:
+        open_tickets = 0
+    else:
+        open_tickets = len([ch for ch in category.channels if ch.name.startswith("ticket-")])
+
+    embed = discord.Embed(
+        title="📊 Support Ticket Statistics",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="🎫 Open Tickets", value=str(open_tickets), inline=True)
+    embed.add_field(name="📈 Total Created", value=str(TICKET_COUNTER), inline=True)
+
+    if category:
+        embed.add_field(name="📂 Category", value=f"#{category.name}", inline=True)
+
+    embed.set_footer(text="ScubaAI Support System")
+    embed.set_thumbnail(url=guild.icon.url if guild.icon else None)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="close_ticket", description="Close the current support ticket")
+async def close_ticket_slash(interaction: discord.Interaction):
+    channel = interaction.channel
+
+    # Check if this is a ticket channel
+    if not channel.name.startswith("ticket-"):
+        await interaction.response.send_message("❌ This command can only be used in ticket channels!", ephemeral=True)
+        return
+
+    # Create confirmation embed
+    embed = discord.Embed(
+        title="🔒 Close Support Ticket",
+        description="Are you sure you want to close this support ticket?",
+        color=discord.Color.red()
+    )
+    embed.add_field(
+        name="⚠️ Warning",
+        value="This action cannot be undone. The channel and all messages will be permanently deleted.",
+        inline=False
+    )
+
+    await interaction.response.send_message(
+        embed=embed,
+        view=ConfirmCloseView(),
+        ephemeral=True
+    )
+
+
+# Backup prefix commands for tickets
+@bot.command(name="ticket_panel")
+@commands.has_permissions(administrator=True)
+async def create_ticket_panel(ctx):
+    """Create the support ticket panel (prefix command)"""
+    embed = discord.Embed(
+        title="🎫 Support Ticket System",
+        description=(
+            "Need help with trading, account issues, or have questions?\n"
+            "Create a private support ticket using the button below!\n\n"
+            "**Our support team can help with:**\n"
+            "• Trading disputes or issues\n"
+            "• Account verification problems\n"
+            "• Technical support\n"
+            "• General questions about the marketplace\n"
+            "• Reporting problems or violations"
+        ),
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text="ScubaAI Support - We're here to help 24/7!")
+
+    await ctx.send(embed=embed, view=TicketView())
+
+
+@bot.command(name="ticket_stats")
+@commands.has_permissions(administrator=True)
+async def ticket_stats_prefix(ctx):
+    """View support ticket statistics (prefix command)"""
+    guild = ctx.guild
+    category = discord.utils.get(guild.categories, name=TICKET_CATEGORY_NAME)
+
+    if not category:
+        open_tickets = 0
+    else:
+        open_tickets = len([ch for ch in category.channels if ch.name.startswith("ticket-")])
+
+    embed = discord.Embed(
+        title="📊 Support Ticket Statistics",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="🎫 Open Tickets", value=str(open_tickets), inline=True)
+    embed.add_field(name="📈 Total Created", value=str(TICKET_COUNTER), inline=True)
+
+    if category:
+        embed.add_field(name="📂 Category", value=f"#{category.name}", inline=True)
+
+    embed.set_footer(text="ScubaAI Support System")
+
+    await ctx.send(embed=embed)
+
+
+# === COMBINED OVERVIEW COMMAND ===
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def overview(ctx):
+    """Get an overview of all bot systems"""
+    guild = ctx.guild
+
+    # Trading stats
+    temp_count = len(bot.temp_sales)
+    active_count = len(bot.active_listings)
+    pending_vouches_count = len(bot.pending_vouches)
+
+    # Ticket stats
+    ticket_category = discord.utils.get(guild.categories, name=TICKET_CATEGORY_NAME)
+    open_tickets = 0
+    if ticket_category:
+        open_tickets = len([ch for ch in ticket_category.channels if ch.name.startswith("ticket-")])
+
+    # AI stats
+    ai_sessions = len(user_chat_sessions) if AI_READY else 0
+
+    embed = discord.Embed(
+        title="🤖 Bot System Overview",
+        description="Complete status of all bot systems",
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow()
+    )
+
+    # Trading System
+    embed.add_field(
+        name="💼 Trading System",
+        value=(
+            f"Pending listings: {temp_count}\n"
+            f"Active listings: {active_count}\n"
+            f"Pending vouches: {pending_vouches_count}\n"
+            f"Total users: {len(bot.user_stats)}"
+        ),
+        inline=True
+    )
+
+    # Support System
+    embed.add_field(
+        name="🎫 Support System",
+        value=(
+            f"Open tickets: {open_tickets}\n"
+            f"Total created: {TICKET_COUNTER}\n"
+            f"Category: {ticket_category.name if ticket_category else 'Not found'}"
+        ),
+        inline=True
+    )
+
+    # AI System
+    embed.add_field(
+        name="🤖 AI System",
+        value=(
+            f"Status: {'✅ Online' if AI_READY else '❌ Offline'}\n"
+            f"Active sessions: {ai_sessions}\n"
+            f"Model: {'gemini-1.5-flash' if AI_READY else 'N/A'}"
+        ),
+        inline=True
+    )
+
+    embed.set_footer(text=f"Requested by {ctx.author}")
+    await ctx.send(embed=embed)
+
+
 # === Event Handlers ===
 @bot.event
 async def on_message(message: discord.Message):
-    """Handle DM messages for listing images"""
+    """Handle DM messages for listing images and AI chat"""
     if message.author.bot:
         return
 
-    # Handle DM image submissions
+    # Handle DM image submissions for trading
     if isinstance(message.channel, discord.DMChannel) and message.attachments:
         sale = bot.temp_sales.get(message.author.id)
         if not sale:
@@ -1355,7 +1695,7 @@ async def on_message(message: discord.Message):
             )
         return
 
-        # Handle AI chat with Gemini
+    # Handle AI chat with Gemini
     if message.channel.id == AI_CHANNEL_ID:
         if not AI_READY:
             status_msg = "AI chat is currently unavailable."
@@ -1421,9 +1761,12 @@ async def on_message(message: discord.Message):
 @bot.event
 async def on_ready():
     """Bot startup event"""
-    # Add persistent views
+    # Add persistent views for both systems
     bot.add_view(SaleView())
     bot.add_view(TradeView(bot, None))  # For persistent trade buttons
+    bot.add_view(TicketView())  # For persistent ticket creation
+    bot.add_view(CloseTicketView())  # For persistent ticket closing
+    bot.add_view(ConfirmCloseView())  # For persistent close confirmation
 
     # Start cleanup task
     if not hasattr(bot, '_cleanup_started'):
@@ -1431,9 +1774,26 @@ async def on_ready():
         bot._cleanup_started = True
 
     print(f"✅ {bot.user} is online and ready!")
-    print(f"📊 Active temp sales: {len(bot.temp_sales)}")
-    print(f"📊 Active listings: {len(bot.active_listings)}")
-    print(f"📊 Pending vouches: {len(bot.pending_vouches)}")
+    print(f"📊 Trading System:")
+    print(f"   - Active temp sales: {len(bot.temp_sales)}")
+    print(f"   - Active listings: {len(bot.active_listings)}")
+    print(f"   - Pending vouches: {len(bot.pending_vouches)}")
+    print(f"🎫 Support System:")
+    print(f"   - Total tickets created: {TICKET_COUNTER}")
+    print(f"🤖 AI System:")
+    print(f"   - Gemini status: {'✅ Ready' if AI_READY else '❌ Not available'}")
+    print(f"   - Active sessions: {len(user_chat_sessions) if AI_READY else 0}")
+
+    # Sync slash commands
+    try:
+        print("🔄 Syncing application commands...")
+        synced = await bot.tree.sync()
+        print(f"✅ Successfully synced {len(synced)} slash command(s)")
+        for command in synced:
+            print(f"   - /{command.name}")
+    except Exception as e:
+        print(f"❌ Failed to sync commands: {e}")
+        logger.error(f"Command sync error: {e}")
 
     logger.info(f"Bot started successfully as {bot.user}")
 
@@ -1447,7 +1807,7 @@ async def on_command_error(ctx, error):
             description="You don't have permission to use this command.",
             color=discord.Color.red()
         )
-        await ctx.send(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
     elif isinstance(error, commands.CommandNotFound):
         return  # Ignore unknown commands
     elif isinstance(error, commands.BadArgument):
@@ -1471,6 +1831,42 @@ async def on_command_error(ctx, error):
 async def on_error(event, *args, **kwargs):
     """Handle general bot errors"""
     logger.error(f"Bot error in {event}: {args}, {kwargs}")
+
+
+# === Error handling for slash commands ===
+@ticket_panel_slash.error
+async def ticket_panel_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
+    else:
+        logger.error(f"Error in ticket_panel: {error}")
+        await interaction.response.send_message("❌ An error occurred. Please try again later.", ephemeral=True)
+
+
+@ticket_stats_slash.error
+async def ticket_stats_error(interaction: discord.Interaction, error):
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
+    else:
+        logger.error(f"Error in ticket_stats: {error}")
+        await interaction.response.send_message("❌ An error occurred. Please try again later.", ephemeral=True)
+
+
+# Manual sync command (for debugging)
+@bot.tree.command(name="sync", description="Manually sync application commands")
+async def sync_commands(interaction: discord.Interaction):
+    if not (interaction.user.guild_permissions.administrator or interaction.user.id == interaction.guild.owner_id):
+        await interaction.response.send_message("❌ You don't have permission to use this command!", ephemeral=True)
+        return
+
+    try:
+        synced = await bot.tree.sync()
+        await interaction.response.send_message(f"✅ Successfully synced {len(synced)} application commands!",
+                                                ephemeral=True)
+        logger.info(f"Commands manually synced by {interaction.user}")
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Failed to sync commands: {e}", ephemeral=True)
+        logger.error(f"Manual sync failed: {e}")
 
 
 # === Cleanup Tasks ===
@@ -1514,7 +1910,16 @@ async def cleanup_expired_listings():
 
 # === Run Bot ===
 if __name__ == "__main__":
+    if not TOKEN:
+        print("❌ ERROR: DISCORD_TOKEN environment variable not set!")
+        exit(1)
+
     try:
+        print("🚀 Starting ScubaAI Bot...")
+        print("📋 Systems loading:")
+        print("   - Trading System ✅")
+        print("   - Support Ticket System ✅")
+        print(f"   - AI Chat System {'✅' if AI_READY else '❌'}")
         bot.run(TOKEN)
     except Exception as e:
         logger.error(f"Failed to start bot: {e}")
