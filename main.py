@@ -422,6 +422,7 @@ class TradeView(discord.ui.View):
 
         await interaction.response.send_modal(EditSaleModal(sale, self))
 
+
 class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
     def __init__(self, sale_data, trade_view: TradeView):
         super().__init__()
@@ -475,29 +476,51 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
 
             # Update in database if it's an active listing
             if self.sale_data.get("listing_id"):
-                await db.update_active_listing(self.sale_data)
+                try:
+                    # Update the database directly with SQL
+                    async with db.pool.acquire() as conn:
+                        await conn.execute('''
+                            UPDATE active_listings 
+                            SET account_type = $1, price = $2, description = $3, updated_at = $4
+                            WHERE listing_id = $5
+                        ''',
+                                           self.sale_data["account_type"],
+                                           self.sale_data["price"],
+                                           self.sale_data["description"],
+                                           datetime.utcnow(),
+                                           self.sale_data["listing_id"]
+                                           )
+                    logger.info(f"Updated listing in database: {self.sale_data['listing_id']}")
+                except Exception as db_error:
+                    logger.error(f"Database update error: {db_error}")
+                    # Continue anyway - the message update might still work
 
             # Update the embed message
             channel = interaction.guild.get_channel(self.sale_data["listing_channel_id"])
-            if channel:
+            if not channel:
+                await interaction.response.send_message("❌ Listing channel not found.", ephemeral=True)
+                return
+
+            try:
                 message = await channel.fetch_message(self.sale_data["listing_message_id"])
                 new_embed = build_listing_embed(self.sale_data, message)
                 await message.edit(embed=new_embed)
 
-            await interaction.response.send_message("✅ Listing updated successfully!", ephemeral=True)
-            logger.info(f"Listing edited by {interaction.user}")
+                await interaction.response.send_message("✅ Listing updated successfully!", ephemeral=True)
+                logger.info(f"Listing edited by {interaction.user}")
 
-        except discord.NotFound:
-            await interaction.response.send_message("❌ Original listing message not found.", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message(
-                "❌ I can't send you a DM. Please enable DMs from server members and try again.",
-                ephemeral=True
-            )
+            except discord.NotFound:
+                await interaction.response.send_message("❌ Original listing message not found.", ephemeral=True)
+            except discord.Forbidden:
+                await interaction.response.send_message("❌ I don't have permission to edit that message.",
+                                                        ephemeral=True)
 
+        except discord.HTTPException as http_error:
+            logger.error(f"Discord API error updating listing: {http_error}")
+            await interaction.response.send_message(f"❌ Discord error: {str(http_error)}", ephemeral=True)
         except Exception as e:
-            logger.error(f"Error updating listing: {e}")
-            await interaction.response.send_message("❌ Failed to update listing. Contact staff.", ephemeral=True)
+            logger.error(f"Unexpected error updating listing: {e}")
+            await interaction.response.send_message("❌ An unexpected error occurred. Please try again.", ephemeral=True)
 
 
 class TradeCompleteView(discord.ui.View):
@@ -1457,66 +1480,25 @@ async def on_message(message: discord.Message):
             await message.channel.send("❌ Please send a maximum of 3 screenshots.")
             return
 
-        # Determine target channel
-        target_channel = (
-            bot.get_channel(OSRS_MAIN_CHANNEL_ID)
-            if temp_sale["account_type"].startswith("Main")
-            else bot.get_channel(OSRS_IRON_CHANNEL_ID)
-        )
-
-        if not target_channel:
-            await message.channel.send("❌ Could not find the appropriate listing channel.")
-            return
-
         try:
-            # Prepare sale data with user info
-            sale_data = temp_sale.copy()
-            sale_data["user"] = message.author
-            sale_data["user_id"] = message.author.id
-            sale_data["image_url"] = message.attachments[0].url
+            # Collect image URLs
+            images = [attachment.url for attachment in message.attachments[:3]]
 
-            # Create listing embed
-            view = TradeView(bot, seller=message.author, sale_data=sale_data)
-            embed = build_listing_embed(sale_data, message)
-            embed_message = await target_channel.send(embed=embed, view=view)
+            # Use the existing finalize_listing function
+            await finalize_listing(bot, message.author, temp_sale, images)
 
-            # Generate listing ID and save IDs
-            listing_id = str(uuid.uuid4())
-            sale_data["listing_id"] = listing_id
-            sale_data["listing_message_id"] = embed_message.id
-            sale_data["listing_channel_id"] = embed_message.channel.id
-            sale_data["extra_message_ids"] = []
-
-            # Send additional images
-            if len(message.attachments) > 1:
-                for i, attachment in enumerate(message.attachments[1:3], start=2):
-                    img_embed = discord.Embed(
-                        title=f"📷 Additional Screenshot #{i}",
-                        description=f"**Seller:** {message.author.mention}\n**Account:** {sale_data['account_type']}",
-                        color=discord.Color.gold()
-                    )
-                    img_embed.set_image(url=attachment.url)
-                    img_msg = await target_channel.send(embed=img_embed)
-                    sale_data["extra_message_ids"].append(img_msg.id)
-
-            # ✅ Save to active listings (use the new function!)
-            await db.create_active_listing(sale_data)
-
-            # Clean up temp sale
-            await db.delete_temp_sale(message.author.id)
-
+            # Send success message
             success_embed = discord.Embed(
                 title="✅ Listing Posted Successfully!",
-                description=f"Your **{sale_data['account_type']}** listing has been posted!",
+                description=f"Your **{temp_sale['account_type']}** listing has been posted!",
                 color=discord.Color.green()
             )
             await message.reply(embed=success_embed)
 
-            logger.info(f"Listing posted successfully: {listing_id}")
-
         except Exception as e:
             logger.error(f"Error posting listing: {e}")
             await message.channel.send("❌ Error posting your listing. Please try again.")
+            return
 
 
     # Handle AI chat

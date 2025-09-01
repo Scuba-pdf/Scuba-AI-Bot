@@ -268,27 +268,21 @@ class DatabaseManager:
             sale_data["listing_message_id"],
         )
 
-    async def update_active_listing(sale_data: dict):
-        query = """
-        UPDATE active_listings
-        SET account_type = $2,
-            price = $3,
-            description = $4,
-            user_id = $5,
-            listing_channel_id = $6,
-            listing_message_id = $7
-        WHERE listing_id = $1
-        """
-        await conn.execute(
-            query,
-            sale_data["listing_id"],
-            sale_data["account_type"],
-            sale_data["price"],
-            sale_data["description"],
-            sale_data["user_id"],
-            sale_data["listing_channel_id"],
-            sale_data["listing_message_id"],
-        )
+
+    async def update_active_listing(self, listing_data: dict):
+        """Update an active listing in the database"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                UPDATE active_listings 
+                SET account_type = $1, price = $2, description = $3, updated_at = $4
+                WHERE listing_id = $5
+            ''',
+                               listing_data["account_type"],
+                               listing_data["price"],
+                               listing_data["description"],
+                               datetime.utcnow(),
+                               listing_data["listing_id"]
+                               )
 
     async def get_active_listing(self, listing_id: str) -> Optional[Dict]:
         """Get active listing by ID"""
