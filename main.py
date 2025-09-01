@@ -258,35 +258,71 @@ class SaleModal(discord.ui.Modal):
 
 async def finalize_listing(bot, user: discord.User, sale_data: dict, images: list[str]):
     """Finalize a listing once screenshots are received"""
-    guild = bot.guilds[0]  # If multiple guilds, adjust accordingly
-    # Pick correct channel based on account type
-    channel_id = OSRS_MAIN_CHANNEL_ID if "Main" in sale_data["account_type"] else OSRS_IRON_CHANNEL_ID
-    channel = guild.get_channel(channel_id)
+    try:
+        guild = bot.guilds[0]  # If multiple guilds, adjust accordingly
+        # Pick correct channel based on account type
+        channel_id = OSRS_MAIN_CHANNEL_ID if "Main" in sale_data["account_type"] else OSRS_IRON_CHANNEL_ID
+        channel = guild.get_channel(channel_id)
 
-    if not channel:
-        logger.error("Listing channel not found.")
-        return
+        if not channel:
+            logger.error("Listing channel not found.")
+            raise Exception("Listing channel not found")
 
-    # Attach first image to embed
-    if images:
-        sale_data["image_url"] = images[0]
+        # Attach first image to embed
+        if images:
+            sale_data["image_url"] = images[0]
 
-    # Send embed + buttons
-    embed = build_listing_embed(sale_data)
-    message = await channel.send(embed=embed, view=TradeView(bot, user, sale_data))
+        # Prepare sale data with user info
+        sale_data["user"] = user
+        sale_data["user_id"] = user.id
 
-    # Add identifiers for DB
-    sale_data["listing_id"] = str(uuid.uuid4())
-    sale_data["listing_channel_id"] = channel.id
-    sale_data["listing_message_id"] = message.id
-    sale_data["user_id"] = user.id
-    sale_data["extra_message_ids"] = []
+        # Send embed + buttons
+        embed = build_listing_embed(sale_data)
+        message = await channel.send(embed=embed, view=TradeView(bot, user, sale_data))
 
-    # Save to DB
-    await db.create_active_listing(sale_data)
-    await db.delete_temp_sale(user.id)  # cleanup temp record
+        # Add identifiers for DB
+        sale_data["listing_id"] = str(uuid.uuid4())
+        sale_data["listing_channel_id"] = channel.id
+        sale_data["listing_message_id"] = message.id
+        sale_data["extra_message_ids"] = []
 
-    logger.info(f"✅ Listing finalized for {user} ({sale_data['listing_id']})")
+        # Send additional images if provided
+        if len(images) > 1:
+            for i, image_url in enumerate(images[1:3], start=2):
+                img_embed = discord.Embed(
+                    title=f"📷 Additional Screenshot #{i}",
+                    description=f"**Seller:** {user.mention}\n**Account:** {sale_data['account_type']}",
+                    color=discord.Color.gold()
+                )
+                img_embed.set_image(url=image_url)
+                img_msg = await channel.send(embed=img_embed)
+                sale_data["extra_message_ids"].append(img_msg.id)
+
+        # Save to DB
+        await db.create_active_listing(sale_data)
+        await db.delete_temp_sale(user.id)  # cleanup temp record
+
+        # Send success message to user via DM
+        try:
+            dm = await user.create_dm()
+            success_embed = discord.Embed(
+                title="✅ Listing Posted Successfully!",
+                description=f"Your **{sale_data['account_type']}** listing has been posted in {channel.mention}!",
+                color=discord.Color.green()
+            )
+            success_embed.add_field(name="Price", value=sale_data['price'], inline=True)
+            success_embed.add_field(name="Listing ID", value=sale_data['listing_id'][:8], inline=True)
+            await dm.send(embed=success_embed)
+        except discord.Forbidden:
+            # If DM fails, that's okay - the listing was still posted successfully
+            logger.warning(f"Could not send success DM to {user}")
+
+        logger.info(f"✅ Listing finalized for {user} ({sale_data['listing_id']})")
+
+    except Exception as e:
+        logger.error(f"Error in finalize_listing: {e}")
+        # Re-raise the exception so the calling function can handle it
+        raise e
 
 class TradeView(discord.ui.View):
     def __init__(self, bot, seller, sale_data=None):
@@ -1486,14 +1522,6 @@ async def on_message(message: discord.Message):
 
             # Use the existing finalize_listing function
             await finalize_listing(bot, message.author, temp_sale, images)
-
-            # Send success message
-            success_embed = discord.Embed(
-                title="✅ Listing Posted Successfully!",
-                description=f"Your **{temp_sale['account_type']}** listing has been posted!",
-                color=discord.Color.green()
-            )
-            await message.reply(embed=success_embed)
 
         except Exception as e:
             logger.error(f"Error posting listing: {e}")
