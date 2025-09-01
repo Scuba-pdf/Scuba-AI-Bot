@@ -249,7 +249,7 @@ class DatabaseManager:
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM temp_sales WHERE user_id = $1', user_id)
 
-    async def create_active_listing(sale_data: dict):
+    async def create_active_listing(self, sale_data: dict):
         query = """
         INSERT INTO active_listings (
             listing_id, account_type, price, description,
@@ -257,7 +257,7 @@ class DatabaseManager:
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         """
-        await conn.execute(
+        await self.conn.execute(  # assuming self.conn is your DB connection
             query,
             sale_data["listing_id"],
             sale_data["account_type"],
