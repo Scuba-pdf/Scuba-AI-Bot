@@ -32,6 +32,16 @@ class DatabaseManager:
             logger.error(f"Failed to initialize database: {e}")
             raise
 
+        await db.initialize()
+        await db.add_updated_at_column()
+
+    async def add_updated_at_column(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                ALTER TABLE active_listings
+                ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+            """)
+
     async def create_tables(self):
         """Create all necessary tables"""
         async with self.pool.acquire() as conn:
@@ -253,20 +263,21 @@ class DatabaseManager:
         query = """
         INSERT INTO active_listings (
             listing_id, account_type, price, description,
-            user_id, listing_channel_id, listing_message_id
+            user_id, listing_channel_id, listing_message_id, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
         """
-        await self.conn.execute(  # assuming self.conn is your DB connection
-            query,
-            sale_data["listing_id"],
-            sale_data["account_type"],
-            sale_data["price"],
-            sale_data["description"],
-            sale_data["user_id"],
-            sale_data["listing_channel_id"],
-            sale_data["listing_message_id"],
-        )
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                query,
+                sale_data["listing_id"],
+                sale_data["account_type"],
+                sale_data["price"],
+                sale_data["description"],
+                sale_data["user_id"],
+                sale_data["listing_channel_id"],
+                sale_data["listing_message_id"],
+            )
 
 
     async def update_active_listing(self, listing_data: dict):
