@@ -357,6 +357,17 @@ class TradeView(discord.ui.View):
             logger.error(f"Error canceling listing: {e}")
             await interaction.followup.send("❌ Error canceling listing. Contact staff if needed.", ephemeral=True)
 
+    @discord.ui.button(label="✏️ Edit Listing", style=discord.ButtonStyle.secondary, custom_id="edit_listing")
+    async def edit_listing(self, interaction: discord.Interaction, button: discord.ui.Button):
+        sale = self.sale_data
+
+        if not sale or interaction.user.id != sale.get("user_id", sale.get("user", {}).id if hasattr(sale.get("user"),
+                                                                                                     "id") else None):
+            await interaction.response.send_message("❌ Only the seller can edit this listing.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(EditSaleModal(sale, self))
+
     async def delete_listing_messages(self, guild, sale):
         """Helper method to delete all listing messages"""
         listing_channel = guild.get_channel(sale.get("listing_channel_id"))
@@ -379,6 +390,82 @@ class TradeView(discord.ui.View):
             except (discord.NotFound, discord.Forbidden):
                 pass
 
+class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
+    def __init__(self, sale_data, trade_view: TradeView):
+        super().__init__()
+        self.sale_data = sale_data
+        self.trade_view = trade_view
+
+        # Pre-fill with current values
+        current_type = sale_data["account_type"].split(" - ", 1)[-1] if " - " in sale_data["account_type"] else \
+            sale_data["account_type"]
+
+        self.account_type = discord.ui.TextInput(
+            label="Account Type",
+            default=current_type,
+            required=True,
+            max_length=100
+        )
+        self.price = discord.ui.TextInput(
+            label="Price",
+            default=sale_data["price"],
+            required=True,
+            max_length=50
+        )
+        self.description = discord.ui.TextInput(
+            label="Description",
+            style=discord.TextStyle.paragraph,
+            default=sale_data["description"],
+            required=True,
+            max_length=1024
+        )
+
+        self.add_item(self.account_type)
+        self.add_item(self.price)
+        self.add_item(self.description)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        # Validate new price format
+        if not validate_price_format(self.price.value):
+            await interaction.response.send_message(
+                "❌ Invalid price format. Please use formats like: $150, 250m GP, 100k OSRS",
+                ephemeral=True
+            )
+            return
+
+        try:
+            # Update the sale data
+            account_prefix = self.sale_data["account_type"].split(" - ")[0] if " - " in self.sale_data[
+                "account_type"] else "Account"
+            self.sale_data["account_type"] = f"{account_prefix} - {self.account_type.value}"
+            self.sale_data["price"] = self.price.value
+            self.sale_data["description"] = self.description.value
+
+            # Update in database if it's an active listing
+            if self.sale_data.get("listing_id"):
+                await db.save_active_listing(self.sale_data["listing_id"], self.sale_data)
+
+            # Update the embed message
+            channel = interaction.guild.get_channel(self.sale_data["listing_channel_id"])
+            if channel:
+                message = await channel.fetch_message(self.sale_data["listing_message_id"])
+                new_embed = build_listing_embed(self.sale_data, message)
+                await message.edit(embed=new_embed)
+
+            await interaction.response.send_message("✅ Listing updated successfully!", ephemeral=True)
+            logger.info(f"Listing edited by {interaction.user}")
+
+        except discord.NotFound:
+            await interaction.response.send_message("❌ Original listing message not found.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error updating listing: {e}")
+            await interaction.response.send_message("❌ Failed to update listing. Contact staff.", ephemeral=True)
+
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ I can't send you a DM. Please enable DMs from server members and try again.",
+                ephemeral=True
+            )
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
