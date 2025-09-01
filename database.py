@@ -251,38 +251,43 @@ class DatabaseManager:
             await conn.execute('DELETE FROM temp_sales WHERE user_id = $1', user_id)
 
     async def create_active_listing(self, sale_data: dict):
+        """Create a new active listing"""
         query = """
         INSERT INTO active_listings (
-            listing_id, account_type, price, description,
-            user_id, listing_channel_id, listing_message_id, updated_at
+            listing_id, user_id, account_type, price, description,
+            image_url, listing_channel_id, listing_message_id, extra_message_ids
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         """
+
+        # Convert extra_message_ids to JSON string
+        extra_message_ids_json = json.dumps(sale_data.get("extra_message_ids", []))
+
         async with self.pool.acquire() as conn:
             await conn.execute(
                 query,
                 sale_data["listing_id"],
+                sale_data["user_id"],
                 sale_data["account_type"],
                 sale_data["price"],
                 sale_data["description"],
-                sale_data["user_id"],
+                sale_data.get("image_url"),
                 sale_data["listing_channel_id"],
                 sale_data["listing_message_id"],
+                extra_message_ids_json
             )
-
 
     async def update_active_listing(self, listing_data: dict):
         """Update an active listing in the database"""
         async with self.pool.acquire() as conn:
             await conn.execute('''
                 UPDATE active_listings 
-                SET account_type = $1, price = $2, description = $3, updated_at = $4
-                WHERE listing_id = $5
+                SET account_type = $1, price = $2, description = $3
+                WHERE listing_id = $4
             ''',
                                listing_data["account_type"],
                                listing_data["price"],
                                listing_data["description"],
-                               datetime.utcnow(),
                                listing_data["listing_id"]
                                )
 
