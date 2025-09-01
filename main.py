@@ -256,6 +256,37 @@ class SaleModal(discord.ui.Modal):
                 ephemeral=True
             )
 
+async def finalize_listing(bot, user: discord.User, sale_data: dict, images: list[str]):
+    """Finalize a listing once screenshots are received"""
+    guild = bot.guilds[0]  # If multiple guilds, adjust accordingly
+    # Pick correct channel based on account type
+    channel_id = OSRS_MAIN_CHANNEL_ID if "Main" in sale_data["account_type"] else OSRS_IRON_CHANNEL_ID
+    channel = guild.get_channel(channel_id)
+
+    if not channel:
+        logger.error("Listing channel not found.")
+        return
+
+    # Attach first image to embed
+    if images:
+        sale_data["image_url"] = images[0]
+
+    # Send embed + buttons
+    embed = build_listing_embed(sale_data)
+    message = await channel.send(embed=embed, view=TradeView(bot, user, sale_data))
+
+    # Add identifiers for DB
+    sale_data["listing_id"] = str(uuid.uuid4())
+    sale_data["listing_channel_id"] = channel.id
+    sale_data["listing_message_id"] = message.id
+    sale_data["user_id"] = user.id
+    sale_data["extra_message_ids"] = []
+
+    # Save to DB
+    await db.create_active_listing(sale_data)
+    await db.delete_temp_sale(user.id)  # cleanup temp record
+
+    logger.info(f"✅ Listing finalized for {user} ({sale_data['listing_id']})")
 
 class TradeView(discord.ui.View):
     def __init__(self, bot, seller, sale_data=None):
@@ -444,7 +475,7 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
 
             # Update in database if it's an active listing
             if self.sale_data.get("listing_id"):
-                await db.save_active_listing(self.sale_data["listing_id"], self.sale_data)
+                await db.update_active_listing(self.sale_data)
 
             # Update the embed message
             channel = interaction.guild.get_channel(self.sale_data["listing_channel_id"])
@@ -1438,17 +1469,18 @@ async def on_message(message: discord.Message):
             return
 
         try:
-            # Prepare sale data with user object
+            # Prepare sale data with user info
             sale_data = temp_sale.copy()
             sale_data["user"] = message.author
+            sale_data["user_id"] = message.author.id
             sale_data["image_url"] = message.attachments[0].url
 
-            # Create listing
+            # Create listing embed
             view = TradeView(bot, seller=message.author, sale_data=sale_data)
             embed = build_listing_embed(sale_data, message)
             embed_message = await target_channel.send(embed=embed, view=view)
 
-            # Generate listing ID and save to database
+            # Generate listing ID and save IDs
             listing_id = str(uuid.uuid4())
             sale_data["listing_id"] = listing_id
             sale_data["listing_message_id"] = embed_message.id
@@ -1467,8 +1499,8 @@ async def on_message(message: discord.Message):
                     img_msg = await target_channel.send(embed=img_embed)
                     sale_data["extra_message_ids"].append(img_msg.id)
 
-            # Save to active listings
-            await db.save_active_listing(listing_id, sale_data)
+            # ✅ Save to active listings (use the new function!)
+            await db.create_active_listing(sale_data)
 
             # Clean up temp sale
             await db.delete_temp_sale(message.author.id)
@@ -1485,6 +1517,7 @@ async def on_message(message: discord.Message):
         except Exception as e:
             logger.error(f"Error posting listing: {e}")
             await message.channel.send("❌ Error posting your listing. Please try again.")
+
 
     # Handle AI chat
     elif message.channel.id == AI_CHANNEL_ID and AI_READY:

@@ -249,21 +249,39 @@ class DatabaseManager:
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM temp_sales WHERE user_id = $1', user_id)
 
-    async def save_active_listing(listing_id: int, sale_data: dict):
+    async def create_active_listing(sale_data: dict):
         query = """
-        INSERT INTO active_listings (listing_id, account_type, price, description, user_id, listing_channel_id, listing_message_id)
+        INSERT INTO active_listings (
+            listing_id, account_type, price, description,
+            user_id, listing_channel_id, listing_message_id
+        )
         VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (listing_id) DO UPDATE
-        SET account_type = EXCLUDED.account_type,
-            price = EXCLUDED.price,
-            description = EXCLUDED.description,
-            user_id = EXCLUDED.user_id,
-            listing_channel_id = EXCLUDED.listing_channel_id,
-            listing_message_id = EXCLUDED.listing_message_id
         """
         await conn.execute(
             query,
-            listing_id,
+            sale_data["listing_id"],
+            sale_data["account_type"],
+            sale_data["price"],
+            sale_data["description"],
+            sale_data["user_id"],
+            sale_data["listing_channel_id"],
+            sale_data["listing_message_id"],
+        )
+
+    async def update_active_listing(sale_data: dict):
+        query = """
+        UPDATE active_listings
+        SET account_type = $2,
+            price = $3,
+            description = $4,
+            user_id = $5,
+            listing_channel_id = $6,
+            listing_message_id = $7
+        WHERE listing_id = $1
+        """
+        await conn.execute(
+            query,
+            sale_data["listing_id"],
             sale_data["account_type"],
             sale_data["price"],
             sale_data["description"],
