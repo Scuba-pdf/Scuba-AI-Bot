@@ -200,8 +200,11 @@ class SaleModal(discord.ui.Modal):
         self.add_item(self.description)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # IMMEDIATELY defer the response to prevent timeout
+        await interaction.response.defer(ephemeral=True)
+
         if not validate_price_format(self.price.value):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Invalid price format. Please use formats like: $150, 250m GP, 100k OSRS",
                 ephemeral=True
             )
@@ -210,7 +213,7 @@ class SaleModal(discord.ui.Modal):
         # Check for active listings using database
         user_active_listings = await db.get_user_active_listings(interaction.user.id)
         if len(user_active_listings) >= 3:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ You can only have 3 active listings at a time. Cancel or complete existing trades first.",
                 ephemeral=True
             )
@@ -223,7 +226,9 @@ class SaleModal(discord.ui.Modal):
                 "📸 Include combat stats, bank value, or any other relevant screenshots.\n"
                 "⏰ You have 10 minutes to send the images."
             )
-            await interaction.response.send_message(
+
+            # Now send the followup message
+            await interaction.followup.send(
                 "📩 Check your DMs to complete your listing by sending screenshots!",
                 ephemeral=True
             )
@@ -240,24 +245,36 @@ class SaleModal(discord.ui.Modal):
 
             await db.save_temp_sale(interaction.user.id, sale_data)
 
-            # Auto-cleanup expired listings
-            await asyncio.sleep(600)  # 10 minutes
-            temp_sale = await db.get_temp_sale(interaction.user.id)
-            if temp_sale:
-                await db.delete_temp_sale(interaction.user.id)
-                try:
-                    await dm.send("❌ Your listing expired. Please start over if you still want to list your account.")
-                except discord.Forbidden:
-                    pass
+            # Start cleanup task in background (don't await it)
+            asyncio.create_task(self._cleanup_expired_listing(interaction.user.id, dm))
 
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ I can't send you a DM. Please enable DMs from server members and try again.",
                 ephemeral=True
             )
 
+    async def _cleanup_expired_listing(self, user_id: int, dm_channel):
+        """Background task to cleanup expired listings"""
+        await asyncio.sleep(600)  # 10 minutes
+        temp_sale = await db.get_temp_sale(user_id)
+        if temp_sale:
+            await db.delete_temp_sale(user_id)
+            try:
+                await dm_channel.send(
+                    "❌ Your listing expired. Please start over if you still want to list your account.")
+            except discord.Forbidden:
+                pass
+
+
 async def finalize_listing(bot, user: discord.User, sale_data: dict, images: list[str]):
     """Finalize a listing once screenshots are received"""
+    dm = None
+    try:
+        dm = await user.create_dm()
+    except:
+        pass  # We'll handle DM failures later
+
     try:
         guild = bot.guilds[0]  # If multiple guilds, adjust accordingly
         # Pick correct channel based on account type
@@ -266,7 +283,12 @@ async def finalize_listing(bot, user: discord.User, sale_data: dict, images: lis
 
         if not channel:
             logger.error("Listing channel not found.")
-            raise Exception("Listing channel not found")
+            if dm:
+                try:
+                    await dm.send("❌ Error: Listing channel not found. Contact staff.")
+                except:
+                    pass
+            return
 
         # Attach first image to embed
         if images:
@@ -289,38 +311,46 @@ async def finalize_listing(bot, user: discord.User, sale_data: dict, images: lis
         # Send additional images if provided
         if len(images) > 1:
             for i, image_url in enumerate(images[1:3], start=2):
-                img_embed = discord.Embed(
-                    title=f"📷 Additional Screenshot #{i}",
-                    description=f"**Seller:** {user.mention}\n**Account:** {sale_data['account_type']}",
-                    color=discord.Color.gold()
-                )
-                img_embed.set_image(url=image_url)
-                img_msg = await channel.send(embed=img_embed)
-                sale_data["extra_message_ids"].append(img_msg.id)
+                try:
+                    img_embed = discord.Embed(
+                        title=f"📷 Additional Screenshot #{i}",
+                        description=f"**Seller:** {user.mention}\n**Account:** {sale_data['account_type']}",
+                        color=discord.Color.gold()
+                    )
+                    img_embed.set_image(url=image_url)
+                    img_msg = await channel.send(embed=img_embed)
+                    sale_data["extra_message_ids"].append(img_msg.id)
+                except Exception as e:
+                    logger.error(f"Error posting extra image: {e}")
 
         # Save to DB
         await db.create_active_listing(sale_data)
         await db.delete_temp_sale(user.id)  # cleanup temp record
 
         # Send success message to user via DM
-        try:
-            dm = await user.create_dm()
-            success_embed = discord.Embed(
-                title="✅ Listing Posted Successfully!",
-                description=f"Your **{sale_data['account_type']}** listing has been posted in {channel.mention}!",
-                color=discord.Color.green()
-            )
-            success_embed.add_field(name="Price", value=sale_data['price'], inline=True)
-            success_embed.add_field(name="Listing ID", value=sale_data['listing_id'][:8], inline=True)
-            await dm.send(embed=success_embed)
-        except discord.Forbidden:
-            # If DM fails, that's okay - the listing was still posted successfully
-            logger.warning(f"Could not send success DM to {user}")
+        if dm:
+            try:
+                success_embed = discord.Embed(
+                    title="✅ Listing Posted Successfully!",
+                    description=f"Your **{sale_data['account_type']}** listing has been posted in {channel.mention}!",
+                    color=discord.Color.green()
+                )
+                success_embed.add_field(name="Price", value=sale_data['price'], inline=True)
+                success_embed.add_field(name="Listing ID", value=sale_data['listing_id'][:8], inline=True)
+                await dm.send(embed=success_embed)
+            except discord.Forbidden:
+                logger.warning(f"Could not send success DM to {user}")
 
         logger.info(f"✅ Listing finalized for {user} ({sale_data['listing_id']})")
 
     except Exception as e:
         logger.error(f"Error in finalize_listing: {e}")
+        # Send error message to user if possible
+        if dm:
+            try:
+                await dm.send("❌ Error posting your listing. Please try again or contact staff.")
+            except:
+                pass
         # Re-raise the exception so the calling function can handle it
         raise e
 
@@ -409,6 +439,7 @@ class TradeView(discord.ui.View):
             await interaction.response.send_message("❌ Only the seller can cancel this listing.", ephemeral=True)
             return
 
+        # Defer immediately to prevent timeout
         await interaction.response.defer(ephemeral=True)
 
         try:
@@ -494,9 +525,12 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
         self.add_item(self.description)
 
     async def on_submit(self, interaction: discord.Interaction):
+        # Defer immediately to prevent timeout
+        await interaction.response.defer(ephemeral=True)
+
         # Validate new price format
         if not validate_price_format(self.price.value):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ Invalid price format. Please use formats like: $150, 250m GP, 100k OSRS",
                 ephemeral=True
             )
@@ -513,17 +547,16 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
             # Update in database if it's an active listing
             if self.sale_data.get("listing_id"):
                 try:
-                    # Update the database directly with SQL
+                    # FIXED: Remove the updated_at column reference
                     async with db.pool.acquire() as conn:
                         await conn.execute('''
                             UPDATE active_listings 
-                            SET account_type = $1, price = $2, description = $3, updated_at = $4
-                            WHERE listing_id = $5
+                            SET account_type = $1, price = $2, description = $3
+                            WHERE listing_id = $4
                         ''',
                                            self.sale_data["account_type"],
                                            self.sale_data["price"],
                                            self.sale_data["description"],
-                                           datetime.utcnow(),
                                            self.sale_data["listing_id"]
                                            )
                     logger.info(f"Updated listing in database: {self.sale_data['listing_id']}")
@@ -534,7 +567,7 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
             # Update the embed message
             channel = interaction.guild.get_channel(self.sale_data["listing_channel_id"])
             if not channel:
-                await interaction.response.send_message("❌ Listing channel not found.", ephemeral=True)
+                await interaction.followup.send("❌ Listing channel not found.", ephemeral=True)
                 return
 
             try:
@@ -542,21 +575,21 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
                 new_embed = build_listing_embed(self.sale_data, message)
                 await message.edit(embed=new_embed)
 
-                await interaction.response.send_message("✅ Listing updated successfully!", ephemeral=True)
+                await interaction.followup.send("✅ Listing updated successfully!", ephemeral=True)
                 logger.info(f"Listing edited by {interaction.user}")
 
             except discord.NotFound:
-                await interaction.response.send_message("❌ Original listing message not found.", ephemeral=True)
+                await interaction.followup.send("❌ Original listing message not found.", ephemeral=True)
             except discord.Forbidden:
-                await interaction.response.send_message("❌ I don't have permission to edit that message.",
-                                                        ephemeral=True)
+                await interaction.followup.send("❌ I don't have permission to edit that message.",
+                                                ephemeral=True)
 
         except discord.HTTPException as http_error:
             logger.error(f"Discord API error updating listing: {http_error}")
-            await interaction.response.send_message(f"❌ Discord error: {str(http_error)}", ephemeral=True)
+            await interaction.followup.send(f"❌ Discord error: {str(http_error)}", ephemeral=True)
         except Exception as e:
             logger.error(f"Unexpected error updating listing: {e}")
-            await interaction.response.send_message("❌ An unexpected error occurred. Please try again.", ephemeral=True)
+            await interaction.followup.send("❌ An unexpected error occurred. Please try again.", ephemeral=True)
 
 
 class TradeCompleteView(discord.ui.View):
