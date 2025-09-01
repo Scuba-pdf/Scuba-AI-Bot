@@ -249,19 +249,28 @@ class DatabaseManager:
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM temp_sales WHERE user_id = $1', user_id)
 
-    async def save_active_listing(self, listing_id: str, sale_data: Dict):
-        """Save active listing"""
-        async with self.pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO active_listings 
-                (listing_id, user_id, account_type, price, description, image_url, 
-                 listing_channel_id, listing_message_id, extra_message_ids)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ''', listing_id, sale_data["user"].id, sale_data["account_type"],
-                               sale_data["price"], sale_data["description"],
-                               sale_data.get("image_url"), sale_data.get("listing_channel_id"),
-                               sale_data.get("listing_message_id"),
-                               json.dumps(sale_data.get("extra_message_ids", [])))
+    async def save_active_listing(listing_id: int, sale_data: dict):
+        query = """
+        INSERT INTO active_listings (listing_id, account_type, price, description, user_id, listing_channel_id, listing_message_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (listing_id) DO UPDATE
+        SET account_type = EXCLUDED.account_type,
+            price = EXCLUDED.price,
+            description = EXCLUDED.description,
+            user_id = EXCLUDED.user_id,
+            listing_channel_id = EXCLUDED.listing_channel_id,
+            listing_message_id = EXCLUDED.listing_message_id
+        """
+        await conn.execute(
+            query,
+            listing_id,
+            sale_data["account_type"],
+            sale_data["price"],
+            sale_data["description"],
+            sale_data["user_id"],
+            sale_data["listing_channel_id"],
+            sale_data["listing_message_id"],
+        )
 
     async def get_active_listing(self, listing_id: str) -> Optional[Dict]:
         """Get active listing by ID"""
