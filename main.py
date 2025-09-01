@@ -596,7 +596,7 @@ class StarRatingView(discord.ui.View):
             super().__init__(
                 style=discord.ButtonStyle.primary,
                 label="⭐" * stars,
-                custom_id=f"rate_{stars}"
+                custom_id=f"rate_{stars}_{parent_view.trade_id[:8]}"  # Unique per trade
             )
             self.stars = stars
             self.parent_view = parent_view
@@ -1226,12 +1226,13 @@ async def on_ready():
         print("📊 Loading data from database...")
         # Note: We don't need to load into memory anymore since we query directly
 
-        # Add persistent views
+        # Add persistent views (only those with timeout=None and proper custom_ids)
         bot.add_view(SaleView())
-        bot.add_view(TradeView(bot, None))
         bot.add_view(TicketView())
         bot.add_view(CloseTicketView())
-        bot.add_view(ConfirmCloseView())
+
+        # Note: TradeCompleteView and StarRatingView are not persistent (they have timeouts)
+        # ConfirmCloseView is not persistent (has timeout=60)
 
         # Start cleanup task
         if not hasattr(bot, '_cleanup_started'):
