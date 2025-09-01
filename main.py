@@ -357,16 +357,6 @@ class TradeView(discord.ui.View):
             logger.error(f"Error canceling listing: {e}")
             await interaction.followup.send("❌ Error canceling listing. Contact staff if needed.", ephemeral=True)
 
-    @discord.ui.button(label="✏️ Edit Listing", style=discord.ButtonStyle.secondary, custom_id="edit_listing")
-    async def edit_listing(self, interaction: discord.Interaction, button: discord.ui.Button):
-        sale = self.sale_data
-
-        if not sale or interaction.user.id != sale.get("user_id", sale.get("user", {}).id if hasattr(sale.get("user"),
-                                                                                                     "id") else None):
-            await interaction.response.send_message("❌ Only the seller can edit this listing.", ephemeral=True)
-            return
-
-        await interaction.response.send_modal(EditSaleModal(sale, self))
 
     async def delete_listing_messages(self, guild, sale):
         """Helper method to delete all listing messages"""
@@ -389,6 +379,17 @@ class TradeView(discord.ui.View):
                 await msg.delete()
             except (discord.NotFound, discord.Forbidden):
                 pass
+
+    @discord.ui.button(label="✏️ Edit Listing", style=discord.ButtonStyle.secondary, custom_id="edit_listing")
+    async def edit_listing(self, interaction: discord.Interaction, button: discord.ui.Button):
+        sale = self.sale_data
+
+        if not sale or interaction.user.id != sale.get("user_id", sale.get("user", {}).id if hasattr(sale.get("user"),
+                                                                                                     "id") else None):
+            await interaction.response.send_message("❌ Only the seller can edit this listing.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(EditSaleModal(sale, self))
 
 class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
     def __init__(self, sale_data, trade_view: TradeView):
@@ -457,15 +458,16 @@ class EditSaleModal(discord.ui.Modal, title="Edit Your Listing"):
 
         except discord.NotFound:
             await interaction.response.send_message("❌ Original listing message not found.", ephemeral=True)
-        except Exception as e:
-            logger.error(f"Error updating listing: {e}")
-            await interaction.response.send_message("❌ Failed to update listing. Contact staff.", ephemeral=True)
-
         except discord.Forbidden:
             await interaction.response.send_message(
                 "❌ I can't send you a DM. Please enable DMs from server members and try again.",
                 ephemeral=True
             )
+
+        except Exception as e:
+            logger.error(f"Error updating listing: {e}")
+            await interaction.response.send_message("❌ Failed to update listing. Contact staff.", ephemeral=True)
+
 
 class TradeCompleteView(discord.ui.View):
     def __init__(self, buyer: discord.Member, seller: discord.Member, sale_data: dict = None):
@@ -1013,6 +1015,222 @@ async def stats(ctx, user: discord.Member = None):
         logger.error(f"Error getting stats: {e}")
         await ctx.send("❌ Error retrieving statistics.")
 
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def manual_vouch(ctx, rater: discord.Member, rated_user: discord.Member, rating: int, *,
+                       comment: str = "Manual vouch"):
+    """Manually add a vouch/rating (admin only)"""
+    if rating < 1 or rating > 5:
+        await ctx.send("❌ Rating must be between 1 and 5.")
+        return
+
+    try:
+        # Generate a unique trade ID for manual vouches
+        manual_trade_id = f"manual-{uuid.uuid4().hex[:8]}"
+
+        # Add the vouch directly to completed vouches
+        async with db.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO vouches 
+                (trade_id, rater_id, rated_user_id, rating, comment, role)
+                VALUES ($1, $2, $3, $4, $5, $6)
+            ''', manual_trade_id, rater.id, rated_user.id, rating, comment, "manual")
+
+        # Update user stats
+        await update_user_stats(rated_user.id, "rating", rating, rated_user.display_name)
+
+        # Log to vouch channel
+        channel = ctx.guild.get_channel(VOUCH_LOG_CHANNEL_ID)
+        if channel:
+            embed = discord.Embed(
+                title="📝 Manual Vouch Added",
+                color=discord.Color.blue(),
+                timestamp=datetime.utcnow()
+            )
+            embed.add_field(
+                name="🔧 Manual Entry",
+                value=f"**Trade ID:** {manual_trade_id}\n**Added by:** {ctx.author.mention}",
+                inline=False
+            )
+            embed.add_field(
+                name=f"⭐ Rating - {'⭐' * rating} ({rating}/5)",
+                value=f"**From:** {rater.mention}\n**To:** {rated_user.mention}\n**Comment:** {comment}",
+                inline=False
+            )
+
+            await channel.send(embed=embed)
+
+        embed = discord.Embed(
+            title="✅ Manual Vouch Added",
+            description=f"Added {rating}⭐ rating from {rater.mention} to {rated_user.mention}",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Comment", value=comment, inline=False)
+        embed.add_field(name="Trade ID", value=manual_trade_id, inline=True)
+
+        await ctx.send(embed=embed)
+        logger.info(f"Manual vouch added by {ctx.author}: {rater} -> {rated_user} ({rating}⭐)")
+
+    except Exception as e:
+        logger.error(f"Error adding manual vouch: {e}")
+        await ctx.send("❌ Error adding manual vouch.")
+
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def remove_vouch(ctx, vouch_id: str = None, rater: discord.Member = None, rated_user: discord.Member = None):
+    """Remove a specific vouch (admin only)"""
+    if not vouch_id and not (rater and rated_user):
+        embed = discord.Embed(
+            title="🗑️ Remove Vouch",
+            description=(
+                "Remove a vouch by trade ID or user pair:\n\n"
+                "**By Trade ID:**\n"
+                "`!remove_vouch trade_id_here`\n\n"
+                "**By Users:**\n"
+                "`!remove_vouch @rater @rated_user`"
+            ),
+            color=discord.Color.orange()
+        )
+        await ctx.send(embed=embed)
+        return
+
+    try:
+        async with db.pool.acquire() as conn:
+            if vouch_id:
+                # Remove by trade ID
+                deleted = await conn.execute('''
+                    DELETE FROM vouches WHERE trade_id = $1
+                ''', vouch_id)
+
+                if "DELETE 0" in deleted:
+                    await ctx.send(f"❌ No vouch found with trade ID: {vouch_id}")
+                    return
+
+                await ctx.send(f"✅ Removed vouch with trade ID: {vouch_id}")
+
+            elif rater and rated_user:
+                # Remove by user pair - show options if multiple found
+                vouches = await conn.fetch('''
+                    SELECT trade_id, rating, comment, created_at 
+                    FROM vouches 
+                    WHERE rater_id = $1 AND rated_user_id = $2
+                    ORDER BY created_at DESC
+                ''', rater.id, rated_user.id)
+
+                if not vouches:
+                    await ctx.send(f"❌ No vouches found from {rater.mention} to {rated_user.mention}")
+                    return
+
+                if len(vouches) == 1:
+                    # Only one vouch, remove it
+                    await conn.execute('DELETE FROM vouches WHERE trade_id = $1', vouches[0]['trade_id'])
+                    await ctx.send(f"✅ Removed vouch from {rater.mention} to {rated_user.mention}")
+                else:
+                    # Multiple vouches, show list
+                    embed = discord.Embed(
+                        title="🔍 Multiple Vouches Found",
+                        description=f"Found {len(vouches)} vouches from {rater.mention} to {rated_user.mention}:",
+                        color=discord.Color.blue()
+                    )
+
+                    for i, vouch in enumerate(vouches[:5], 1):
+                        embed.add_field(
+                            name=f"#{i} - {'⭐' * vouch['rating']}",
+                            value=(
+                                f"**Trade ID:** {vouch['trade_id']}\n"
+                                f"**Date:** {vouch['created_at'].strftime('%Y-%m-%d')}\n"
+                                f"**Comment:** {vouch['comment'][:50]}..."
+                            ),
+                            inline=True
+                        )
+
+                    embed.set_footer(text="Use !remove_vouch <trade_id> to remove a specific one")
+                    await ctx.send(embed=embed)
+
+        logger.info(f"Vouch removal by {ctx.author}: {vouch_id or f'{rater} -> {rated_user}'}")
+
+    except Exception as e:
+        logger.error(f"Error removing vouch: {e}")
+        await ctx.send("❌ Error removing vouch.")
+
+
+@bot.command()
+@commands.has_permissions(manage_messages=True)
+async def vouch_history(ctx, user: discord.Member, limit: int = 10):
+    """View detailed vouch history for a user"""
+    if limit > 50:
+        limit = 50
+
+    try:
+        async with db.pool.acquire() as conn:
+            # Get vouches received by user
+            received_vouches = await conn.fetch('''
+                SELECT v.*, u.username as rater_username
+                FROM vouches v
+                LEFT JOIN user_stats u ON v.rater_id = u.user_id
+                WHERE v.rated_user_id = $1
+                ORDER BY v.created_at DESC
+                LIMIT $2
+            ''', user.id, limit)
+
+            # Get vouches given by user
+            given_vouches = await conn.fetch('''
+                SELECT v.*, u.username as rated_username
+                FROM vouches v
+                LEFT JOIN user_stats u ON v.rated_user_id = u.user_id
+                WHERE v.rater_id = $1
+                ORDER BY v.created_at DESC
+                LIMIT $2
+            ''', user.id, limit)
+
+        embed = discord.Embed(
+            title=f"📜 Vouch History for {user.display_name}",
+            color=discord.Color.blue()
+        )
+        embed.set_thumbnail(url=user.display_avatar.url)
+
+        # Received vouches
+        if received_vouches:
+            received_text = []
+            for vouch in received_vouches[:5]:
+                rater_mention = f"<@{vouch['rater_id']}>"
+                date = vouch['created_at'].strftime('%m/%d/%y')
+                stars = '⭐' * vouch['rating']
+                comment = vouch['comment'][:30] + "..." if len(vouch['comment']) > 30 else vouch['comment']
+                received_text.append(f"{stars} {rater_mention} ({date})\n*{comment}*")
+
+            embed.add_field(
+                name=f"📨 Received ({len(received_vouches)} total)",
+                value="\n\n".join(received_text) or "None",
+                inline=False
+            )
+
+        # Given vouches
+        if given_vouches:
+            given_text = []
+            for vouch in given_vouches[:5]:
+                rated_mention = f"<@{vouch['rated_user_id']}>"
+                date = vouch['created_at'].strftime('%m/%d/%y')
+                stars = '⭐' * vouch['rating']
+                comment = vouch['comment'][:30] + "..." if len(vouch['comment']) > 30 else vouch['comment']
+                given_text.append(f"{stars} to {rated_mention} ({date})\n*{comment}*")
+
+            embed.add_field(
+                name=f"📤 Given ({len(given_vouches)} total)",
+                value="\n\n".join(given_text) or "None",
+                inline=False
+            )
+
+        if not received_vouches and not given_vouches:
+            embed.description = "No vouch history found."
+
+        await ctx.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"Error getting vouch history: {e}")
+        await ctx.send("❌ Error retrieving vouch history.")
 
 @bot.command()
 @commands.has_permissions(administrator=True)
