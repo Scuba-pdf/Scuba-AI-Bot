@@ -1612,9 +1612,6 @@ async def on_ready():
         bot.add_view(TicketView())
         bot.add_view(CloseTicketView())
 
-        # Fix database constraint
-        await db.fix_vouches_constraint()
-
         # Start cleanup task
         if not hasattr(bot, '_cleanup_started'):
             bot.loop.create_task(cleanup_task())
