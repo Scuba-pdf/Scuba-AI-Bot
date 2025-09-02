@@ -34,16 +34,19 @@ class DatabaseManager:
 
     async def fix_vouches_constraint(self):
         """Fix the vouches role constraint to allow 'manual' role"""
+        print("🔧 Attempting to fix vouches constraint...")
         async with self.pool.acquire() as conn:
             try:
                 # Drop the old constraint
-                await conn.execute('ALTER TABLE vouches DROP CONSTRAINT IF EXISTS vouches_role_check;')
+                result1 = await conn.execute('ALTER TABLE vouches DROP CONSTRAINT IF EXISTS vouches_role_check;')
+                print(f"Drop constraint result: {result1}")
 
                 # Add the new constraint with 'manual' included
-                await conn.execute('''
+                result2 = await conn.execute('''
                     ALTER TABLE vouches ADD CONSTRAINT vouches_role_check 
                     CHECK (role IN ('buyer', 'seller', 'manual'));
                 ''')
+                print(f"Add constraint result: {result2}")
                 print("✅ Vouches constraint updated successfully")
             except Exception as e:
                 print(f"⚠️ Error updating vouches constraint: {e}")
