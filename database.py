@@ -32,6 +32,21 @@ class DatabaseManager:
             logger.error(f"Failed to initialize database: {e}")
             raise
 
+    async def fix_vouches_constraint(self):
+        """Fix the vouches role constraint to allow 'manual' role"""
+        async with self.pool.acquire() as conn:
+            try:
+                # Drop the old constraint
+                await conn.execute('ALTER TABLE vouches DROP CONSTRAINT IF EXISTS vouches_role_check;')
+
+                # Add the new constraint with 'manual' included
+                await conn.execute('''
+                    ALTER TABLE vouches ADD CONSTRAINT vouches_role_check 
+                    CHECK (role IN ('buyer', 'seller', 'manual'));
+                ''')
+                print("✅ Vouches constraint updated successfully")
+            except Exception as e:
+                print(f"⚠️ Error updating vouches constraint: {e}")
 
     async def create_tables(self):
         """Create all necessary tables"""
