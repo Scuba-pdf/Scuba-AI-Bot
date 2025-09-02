@@ -1066,9 +1066,9 @@ class ConfirmCloseView(discord.ui.View):
 
 
 # === Bot Commands ===
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def panel(ctx):
+@bot.tree.command(name="panel", description="Create the main trading panel (Admin only)")
+@app_commands.default_permissions(administrator=True)
+async def panel_slash(interaction: discord.Interaction):
     """Create the main trading panel"""
     embed = discord.Embed(
         title="🏆 OSRS Account Trading Hub",
@@ -1085,26 +1085,31 @@ async def panel(ctx):
     embed.set_footer(text="⚠️ Always trade through our secure system • Powered by ScubaAI")
 
     view = SaleView()
-    await ctx.send(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed, view=view)
 
 
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def clean_expired(ctx):
+@bot.tree.command(name="clean_expired", description="Clean up expired temporary sales (Staff only)")
+@app_commands.default_permissions(manage_messages=True)
+async def clean_expired_slash(interaction: discord.Interaction):
     """Clean up expired temporary sales"""
+    await interaction.response.defer()
+
     try:
         expired_count = await db.cleanup_expired_temp_sales()
-        await ctx.send(f"✅ Cleaned up {expired_count} expired temporary listings.")
+        await interaction.followup.send(f"✅ Cleaned up {expired_count} expired temporary listings.")
     except Exception as e:
         logger.error(f"Error cleaning expired listings: {e}")
-        await ctx.send("❌ Error cleaning expired listings.")
+        await interaction.followup.send("❌ Error cleaning expired listings.")
 
 
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def stats(ctx, user: discord.Member = None):
+@bot.tree.command(name="stats", description="View trading statistics for yourself or another user")
+@app_commands.describe(user="The user to view stats for (optional)")
+async def stats_slash(interaction: discord.Interaction, user: discord.Member = None):
     """View trading statistics for a user"""
-    target_user = user or ctx.author
+    target_user = user or interaction.user
+
+    await interaction.response.defer()
+
     try:
         stats = await get_user_stats(target_user.id, target_user.display_name)
         rating = await get_average_rating(target_user.id)
@@ -1132,21 +1137,29 @@ async def stats(ctx, user: discord.Member = None):
             rep_level = "🌟 New Trader"
 
         embed.add_field(name="🏅 Reputation Level", value=rep_level, inline=True)
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
-        await ctx.send("❌ Error retrieving statistics.")
+        await interaction.followup.send("❌ Error retrieving statistics.")
 
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def manual_vouch(ctx, rater: discord.Member, rated_user: discord.Member, rating: int, *,
-                       comment: str = "Manual vouch"):
+@bot.tree.command(name="manual_vouch", description="Manually add a vouch/rating (Admin only)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    rater="The user who is giving the rating",
+    rated_user="The user who is being rated",
+    rating="Rating from 1-5 stars",
+    comment="Optional comment for the vouch"
+)
+async def manual_vouch_slash(interaction: discord.Interaction, rater: discord.Member, rated_user: discord.Member,
+                             rating: int, comment: str = "Manual vouch"):
     """Manually add a vouch/rating (admin only)"""
     if rating < 1 or rating > 5:
-        await ctx.send("❌ Rating must be between 1 and 5.")
+        await interaction.response.send_message("❌ Rating must be between 1 and 5.", ephemeral=True)
         return
+
+    await interaction.response.defer()
 
     try:
         # Generate a unique trade ID for manual vouches
@@ -1164,7 +1177,7 @@ async def manual_vouch(ctx, rater: discord.Member, rated_user: discord.Member, r
         await update_user_stats(rated_user.id, "rating", rating, rated_user.display_name)
 
         # Log to vouch channel
-        channel = ctx.guild.get_channel(VOUCH_LOG_CHANNEL_ID)
+        channel = interaction.guild.get_channel(VOUCH_LOG_CHANNEL_ID)
         if channel:
             embed = discord.Embed(
                 title="📝 Manual Vouch Added",
@@ -1173,7 +1186,7 @@ async def manual_vouch(ctx, rater: discord.Member, rated_user: discord.Member, r
             )
             embed.add_field(
                 name="🔧 Manual Entry",
-                value=f"**Trade ID:** {manual_trade_id}\n**Added by:** {ctx.author.mention}",
+                value=f"**Trade ID:** {manual_trade_id}\n**Added by:** {interaction.user.mention}",
                 inline=False
             )
             embed.add_field(
@@ -1192,17 +1205,23 @@ async def manual_vouch(ctx, rater: discord.Member, rated_user: discord.Member, r
         embed.add_field(name="Comment", value=comment, inline=False)
         embed.add_field(name="Trade ID", value=manual_trade_id, inline=True)
 
-        await ctx.send(embed=embed)
-        logger.info(f"Manual vouch added by {ctx.author}: {rater} -> {rated_user} ({rating}⭐)")
+        await interaction.followup.send(embed=embed)
+        logger.info(f"Manual vouch added by {interaction.user}: {rater} -> {rated_user} ({rating}⭐)")
 
     except Exception as e:
         logger.error(f"Error adding manual vouch: {e}")
-        await ctx.send("❌ Error adding manual vouch.")
+        await interaction.followup.send("❌ Error adding manual vouch.")
 
 
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def remove_vouch(ctx, vouch_id: str = None, rater: discord.Member = None, rated_user: discord.Member = None):
+@bot.tree.command(name="remove_vouch", description="Remove a specific vouch (Admin only)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    vouch_id="Trade ID of the vouch to remove",
+    rater="User who gave the rating (alternative to vouch_id)",
+    rated_user="User who received the rating (alternative to vouch_id)"
+)
+async def remove_vouch_slash(interaction: discord.Interaction, vouch_id: str = None, rater: discord.Member = None,
+                             rated_user: discord.Member = None):
     """Remove a specific vouch (admin only)"""
     if not vouch_id and not (rater and rated_user):
         embed = discord.Embed(
@@ -1210,28 +1229,30 @@ async def remove_vouch(ctx, vouch_id: str = None, rater: discord.Member = None, 
             description=(
                 "Remove a vouch by trade ID or user pair:\n\n"
                 "**By Trade ID:**\n"
-                "`!remove_vouch trade_id_here`\n\n"
+                "`/remove_vouch vouch_id:trade_id_here`\n\n"
                 "**By Users:**\n"
-                "`!remove_vouch @rater @rated_user`"
+                "`/remove_vouch rater:@user rated_user:@user`"
             ),
             color=discord.Color.orange()
         )
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
+
+    await interaction.response.defer()
 
     try:
         async with db.pool.acquire() as conn:
             if vouch_id:
                 # Remove by trade ID
-                deleted = await conn.execute('''
+                result = await conn.execute('''
                     DELETE FROM vouches WHERE trade_id = $1
                 ''', vouch_id)
 
-                if "DELETE 0" in deleted:
-                    await ctx.send(f"❌ No vouch found with trade ID: {vouch_id}")
+                if result == "DELETE 0":
+                    await interaction.followup.send(f"❌ No vouch found with trade ID: {vouch_id}")
                     return
 
-                await ctx.send(f"✅ Removed vouch with trade ID: {vouch_id}")
+                await interaction.followup.send(f"✅ Removed vouch with trade ID: {vouch_id}")
 
             elif rater and rated_user:
                 # Remove by user pair - show options if multiple found
@@ -1243,13 +1264,13 @@ async def remove_vouch(ctx, vouch_id: str = None, rater: discord.Member = None, 
                 ''', rater.id, rated_user.id)
 
                 if not vouches:
-                    await ctx.send(f"❌ No vouches found from {rater.mention} to {rated_user.mention}")
+                    await interaction.followup.send(f"❌ No vouches found from {rater.mention} to {rated_user.mention}")
                     return
 
                 if len(vouches) == 1:
                     # Only one vouch, remove it
                     await conn.execute('DELETE FROM vouches WHERE trade_id = $1', vouches[0]['trade_id'])
-                    await ctx.send(f"✅ Removed vouch from {rater.mention} to {rated_user.mention}")
+                    await interaction.followup.send(f"✅ Removed vouch from {rater.mention} to {rated_user.mention}")
                 else:
                     # Multiple vouches, show list
                     embed = discord.Embed(
@@ -1269,22 +1290,28 @@ async def remove_vouch(ctx, vouch_id: str = None, rater: discord.Member = None, 
                             inline=True
                         )
 
-                    embed.set_footer(text="Use !remove_vouch <trade_id> to remove a specific one")
-                    await ctx.send(embed=embed)
+                    embed.set_footer(text="Use /remove_vouch vouch_id:<trade_id> to remove a specific one")
+                    await interaction.followup.send(embed=embed)
 
-        logger.info(f"Vouch removal by {ctx.author}: {vouch_id or f'{rater} -> {rated_user}'}")
+        logger.info(f"Vouch removal by {interaction.user}: {vouch_id or f'{rater} -> {rated_user}'}")
 
     except Exception as e:
         logger.error(f"Error removing vouch: {e}")
-        await ctx.send("❌ Error removing vouch.")
+        await interaction.followup.send("❌ Error removing vouch.")
 
 
-@bot.command()
-@commands.has_permissions(manage_messages=True)
-async def vouch_history(ctx, user: discord.Member, limit: int = 10):
+@bot.tree.command(name="vouch_history", description="View detailed vouch history for a user (Staff only)")
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(
+    user="The user to view vouch history for",
+    limit="Number of vouches to show (max 50, default 10)"
+)
+async def vouch_history_slash(interaction: discord.Interaction, user: discord.Member, limit: int = 10):
     """View detailed vouch history for a user"""
     if limit > 50:
         limit = 50
+
+    await interaction.response.defer()
 
     try:
         async with db.pool.acquire() as conn:
@@ -1349,27 +1376,34 @@ async def vouch_history(ctx, user: discord.Member, limit: int = 10):
         if not received_vouches and not given_vouches:
             embed.description = "No vouch history found."
 
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     except Exception as e:
         logger.error(f"Error getting vouch history: {e}")
-        await ctx.send("❌ Error retrieving vouch history.")
+        await interaction.followup.send("❌ Error retrieving vouch history.")
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def clear_vouches(ctx, user: discord.Member, confirmation: str = None):
+
+@bot.tree.command(name="clear_vouches", description="Clear all vouch history for a user (Admin only)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    user="The user to clear vouch history for",
+    confirmation="Type 'CONFIRM' to proceed with deletion"
+)
+async def clear_vouches_slash(interaction: discord.Interaction, user: discord.Member, confirmation: str = None):
     """Clear all vouch history for a user"""
     if confirmation != "CONFIRM":
         embed = discord.Embed(
             title="⚠️ Vouch History Clearing",
             description=(
                 f"This will **permanently delete** all vouch history for {user.mention}.\n\n"
-                f"To confirm, use: `!clear_vouches {user.mention} CONFIRM`"
+                f"To confirm, use: `/clear_vouches user:{user.mention} confirmation:CONFIRM`"
             ),
             color=discord.Color.orange()
         )
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
+
+    await interaction.response.defer()
 
     try:
         old_stats = await get_user_stats(user.id)
@@ -1388,29 +1422,35 @@ async def clear_vouches(ctx, user: discord.Member, confirmation: str = None):
             inline=True
         )
 
-        await ctx.send(embed=embed)
-        logger.info(f"Vouch history cleared for {user} by {ctx.author}")
+        await interaction.followup.send(embed=embed)
+        logger.info(f"Vouch history cleared for {user} by {interaction.user}")
 
     except Exception as e:
         logger.error(f"Error clearing vouches: {e}")
-        await ctx.send("❌ Error clearing vouch history.")
+        await interaction.followup.send("❌ Error clearing vouch history.")
 
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def reset_user_stats(ctx, user: discord.Member, confirmation: str = None):
+@bot.tree.command(name="reset_user_stats", description="Completely reset all stats for a user (Admin only)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(
+    user="The user to reset all data for",
+    confirmation="Type 'CONFIRM' to proceed with complete deletion"
+)
+async def reset_user_stats_slash(interaction: discord.Interaction, user: discord.Member, confirmation: str = None):
     """Completely reset all stats for a user"""
     if confirmation != "CONFIRM":
         embed = discord.Embed(
             title="⚠️ Complete User Reset",
             description=(
                 f"This will **permanently delete** ALL data for {user.mention}.\n\n"
-                f"To confirm, use: `!reset_user_stats {user.mention} CONFIRM`"
+                f"To confirm, use: `/reset_user_stats user:{user.mention} confirmation:CONFIRM`"
             ),
             color=discord.Color.red()
         )
-        await ctx.send(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
+
+    await interaction.response.defer()
 
     try:
         old_stats = await get_user_stats(user.id)
@@ -1429,21 +1469,22 @@ async def reset_user_stats(ctx, user: discord.Member, confirmation: str = None):
             inline=True
         )
 
-        await ctx.send(embed=embed)
-        logger.info(f"Complete user reset for {user} by {ctx.author}")
+        await interaction.followup.send(embed=embed)
+        logger.info(f"Complete user reset for {user} by {interaction.user}")
 
     except Exception as e:
         logger.error(f"Error resetting user: {e}")
-        await ctx.send("❌ Error resetting user data.")
+        await interaction.followup.send("❌ Error resetting user data.")
 
 
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def overview(ctx):
+@bot.tree.command(name="overview", description="Get an overview of all bot systems (Admin only)")
+@app_commands.default_permissions(administrator=True)
+async def overview_slash(interaction: discord.Interaction):
     """Get an overview of all bot systems"""
+    await interaction.response.defer()
+
     try:
         # Get database statistics
-        user_listings = await db.get_user_active_listings(ctx.author.id)  # Sample call
         open_tickets = await db.get_open_tickets_count()
         total_tickets = await db.get_total_tickets_count()
 
@@ -1456,7 +1497,7 @@ async def overview(ctx):
 
         embed.add_field(
             name="💼 Trading System",
-            value=f"Database: ✅ Connected\nOpen tickets: {open_tickets}",
+            value=f"Database: ✅ Connected\nActive AI sessions: {len(user_chat_sessions) if AI_READY else 0}",
             inline=True
         )
 
@@ -1472,11 +1513,162 @@ async def overview(ctx):
             inline=True
         )
 
-        await ctx.send(embed=embed)
+        await interaction.followup.send(embed=embed)
 
     except Exception as e:
         logger.error(f"Error getting overview: {e}")
-        await ctx.send("❌ Error retrieving system overview.")
+        await interaction.followup.send("❌ Error retrieving system overview.")
+
+
+# === Additional Utility Slash Commands ===
+
+@bot.tree.command(name="my_listings", description="View your current active listings")
+async def my_listings_slash(interaction: discord.Interaction):
+    """View user's current active listings"""
+    await interaction.response.defer(ephemeral=True)
+
+    try:
+        listings = await db.get_user_active_listings(interaction.user.id)
+
+        if not listings:
+            embed = discord.Embed(
+                title="📋 Your Active Listings",
+                description="You currently have no active listings.",
+                color=discord.Color.blue()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="📋 Your Active Listings",
+            description=f"You have {len(listings)} active listing(s):",
+            color=discord.Color.green()
+        )
+
+        for i, listing in enumerate(listings[:5], 1):  # Limit to 5 for embed size
+            channel = interaction.guild.get_channel(listing.get('listing_channel_id'))
+            channel_mention = channel.mention if channel else "Unknown Channel"
+
+            embed.add_field(
+                name=f"#{i} - {listing['account_type']}",
+                value=(
+                    f"**Price:** {listing['price']}\n"
+                    f"**Channel:** {channel_mention}\n"
+                    f"**Listed:** {listing.get('created_at', 'Unknown').strftime('%m/%d/%y %H:%M') if listing.get('created_at') else 'Unknown'}"
+                ),
+                inline=True
+            )
+
+        if len(listings) > 5:
+            embed.set_footer(text=f"Showing 5 of {len(listings)} listings")
+
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    except Exception as e:
+        logger.error(f"Error getting user listings: {e}")
+        await interaction.followup.send("❌ Error retrieving your listings.", ephemeral=True)
+
+
+@bot.tree.command(name="leaderboard", description="View the top traders by rating and activity")
+@app_commands.describe(
+    sort_by="Sort leaderboard by rating or trades",
+    limit="Number of users to show (default 10)"
+)
+async def leaderboard_slash(interaction: discord.Interaction, sort_by: str = "rating", limit: int = 10):
+    """View trading leaderboard"""
+    if limit > 25:
+        limit = 25
+
+    await interaction.response.defer()
+
+    try:
+        if sort_by.lower() in ["rating", "stars", "r"]:
+            # Sort by average rating
+            async with db.pool.acquire() as conn:
+                top_users = await conn.fetch('''
+                    SELECT 
+                        user_id, 
+                        username,
+                        sales + purchases as total_trades,
+                        CASE 
+                            WHEN rating_count > 0 THEN ROUND(total_rating::numeric / rating_count, 2)
+                            ELSE 0 
+                        END as avg_rating,
+                        rating_count
+                    FROM user_stats 
+                    WHERE rating_count >= 3
+                    ORDER BY avg_rating DESC, total_trades DESC
+                    LIMIT $1
+                ''', limit)
+
+            embed_title = "⭐ Top Rated Traders"
+            sort_description = "minimum 3 ratings required"
+
+        else:
+            # Sort by total trades
+            async with db.pool.acquire() as conn:
+                top_users = await conn.fetch('''
+                    SELECT 
+                        user_id, 
+                        username,
+                        sales + purchases as total_trades,
+                        CASE 
+                            WHEN rating_count > 0 THEN ROUND(total_rating::numeric / rating_count, 2)
+                            ELSE 0 
+                        END as avg_rating,
+                        rating_count
+                    FROM user_stats 
+                    WHERE sales + purchases > 0
+                    ORDER BY total_trades DESC, avg_rating DESC
+                    LIMIT $1
+                ''', limit)
+
+            embed_title = "🏆 Most Active Traders"
+            sort_description = "sorted by total trades"
+
+        if not top_users:
+            embed = discord.Embed(
+                title=embed_title,
+                description="No qualifying traders found yet.",
+                color=discord.Color.blue()
+            )
+            await interaction.followup.send(embed=embed)
+            return
+
+        embed = discord.Embed(
+            title=embed_title,
+            description=f"Top {len(top_users)} traders ({sort_description})",
+            color=discord.Color.gold()
+        )
+
+        leaderboard_text = []
+        for i, user_data in enumerate(top_users, 1):
+            medal = ["🥇", "🥈", "🥉"][i - 1] if i <= 3 else f"{i}."
+            user_mention = f"<@{user_data['user_id']}>"
+            username = user_data['username'] or "Unknown"
+            trades = user_data['total_trades']
+            rating = user_data['avg_rating']
+            rating_count = user_data['rating_count']
+
+            stars = '⭐' * int(rating) if rating > 0 else "No rating"
+
+            leaderboard_text.append(
+                f"{medal} {user_mention} ({username})\n"
+                f"   📊 {trades} trades • {stars} ({rating}/5) • {rating_count} reviews"
+            )
+
+        embed.add_field(
+            name="🏆 Rankings",
+            value="\n\n".join(leaderboard_text),
+            inline=False
+        )
+
+        embed.set_footer(text="Rankings update in real-time based on completed trades")
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        logger.error(f"Error getting leaderboard: {e}")
+        await interaction.followup.send("❌ Error retrieving leaderboard.")
 
 
 # === Ticket Commands ===
