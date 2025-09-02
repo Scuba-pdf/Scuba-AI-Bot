@@ -1831,16 +1831,6 @@ async def on_ready():
         logger.error(f"Failed to initialize bot: {e}")
         print(f"❌ Failed to start bot: {e}")
 
-        try:
-            # For guild-specific commands (instant sync):
-            guild = discord.Object(id=1244801762183872512)  # Replace with your server ID
-            bot.tree.copy_global_to(guild=guild)
-            synced = await bot.tree.sync(guild=guild)
-            print(f"✅ Successfully synced {len(synced)} commands to guild")
-
-        except Exception as e:
-            print(f"❌ Failed to sync commands: {e}")
-
 
 @bot.event
 async def on_command_error(ctx, error):
