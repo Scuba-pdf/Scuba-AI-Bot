@@ -1574,15 +1574,23 @@ async def my_listings_slash(interaction: discord.Interaction):
     sort_by="Sort leaderboard by rating or trades",
     limit="Number of users to show (default 10)"
 )
-async def leaderboard_slash(interaction: discord.Interaction, sort_by: str = "rating", limit: int = 10):
+@app_commands.choices(sort_by=[
+    app_commands.Choice(name="Rating", value="rating"),
+    app_commands.Choice(name="Total Trades", value="trades")
+])
+async def leaderboard_slash(interaction: discord.Interaction, sort_by: app_commands.Choice[str] = None,
+                            limit: int = 10):
     """View trading leaderboard"""
     if limit > 25:
         limit = 25
 
+    # Use choice value or default to rating
+    sort_value = sort_by.value if sort_by else "rating"
+
     await interaction.response.defer()
 
     try:
-        if sort_by.lower() in ["rating", "stars", "r"]:
+        if sort_value in ["rating", "stars", "r"]:
             # Sort by average rating
             async with db.pool.acquire() as conn:
                 top_users = await conn.fetch('''
@@ -1822,6 +1830,16 @@ async def on_ready():
     except Exception as e:
         logger.error(f"Failed to initialize bot: {e}")
         print(f"❌ Failed to start bot: {e}")
+
+        try:
+            # For guild-specific commands (instant sync):
+            guild = discord.Object(id=1244801762183872512)  # Replace with your server ID
+            bot.tree.copy_global_to(guild=guild)
+            synced = await bot.tree.sync(guild=guild)
+            print(f"✅ Successfully synced {len(synced)} commands to guild")
+
+        except Exception as e:
+            print(f"❌ Failed to sync commands: {e}")
 
 
 @bot.event
