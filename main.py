@@ -1687,7 +1687,14 @@ async def ticket_panel_slash(interaction: discord.Interaction):
         title="🎫 Support Ticket System",
         description=(
             "Need help with trading, account issues, or have questions?\n"
-            "Create a private support ticket using the button below!"
+            "Create a private support ticket using the button below!\n\n"
+            "**Our support team can help with:**\n"
+            "• Trading disputes or issues\n"
+            "• Account verification problems\n"
+            "• Technical support\n"
+            "• General questions about the marketplace\n"
+            "• Reporting problems or violations\n\n"
+            "**ScubaAI Support - We're here to help 24/7!**"
         ),
         color=discord.Color.blue()
     )
