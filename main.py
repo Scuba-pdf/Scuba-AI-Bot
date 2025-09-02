@@ -1612,8 +1612,8 @@ async def on_ready():
         bot.add_view(TicketView())
         bot.add_view(CloseTicketView())
 
-        # Note: TradeCompleteView and StarRatingView are not persistent (they have timeouts)
-        # ConfirmCloseView is not persistent (has timeout=60)
+        # Fix database constraint
+        await db.fix_vouches_constraint()
 
         # Start cleanup task
         if not hasattr(bot, '_cleanup_started'):
